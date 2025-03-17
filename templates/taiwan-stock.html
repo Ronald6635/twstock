@@ -222,6 +222,22 @@
                         </tr>
                     </table>
                 </div>
+                <div class="info-card">
+                    <table>
+                        <tr>
+                            <th>開盤價</th>
+                            <td id="openPrice"></td>
+                        </tr>
+                        <tr>
+                            <th>最高價</th>
+                            <td id="highPrice"></td>
+                        </tr>
+                        <tr>
+                            <th>最低價</th>
+                            <td id="lowPrice"></td>
+                        </tr>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -316,12 +332,36 @@
                 const priceChangeEl = document.getElementById('priceChange');
                 priceChangeEl.textContent = `${data.priceChange}%`;
                 priceChangeEl.style.color = parseFloat(data.priceChange) >= 0 ? 'red' : 'green';
-                
+
                 document.getElementById('volume').textContent = `${data.volume} 張`;
-                
+
+                document.getElementById('openPrice').textContent = `NT$ ${data.openPrice}`;
+
+                const highPriceEl = document.getElementById('highPrice');
+                highPriceEl.textContent = `NT$ ${data.highPrice}`;
+
+                if (parseFloat(data.highPrice) < parseFloat(data.openPrice)) {
+                    highPriceEl.style.color = 'green';
+                } else if (parseFloat(data.highPrice) == parseFloat(data.openPrice)) {
+                    highPriceEl.style.color = '';
+                } else {
+                    highPriceEl.style.color = 'red';
+                }
+
+                const lowPriceEl = document.getElementById('lowPrice');
+                lowPriceEl.textContent = `NT$ ${data.lowPrice}`;
+
+                if (parseFloat(data.lowPrice) < parseFloat(data.openPrice)) {
+                    lowPriceEl.style.color = 'green';
+                } else if (parseFloat(data.lowPrice) == parseFloat(data.openPrice)) {
+                    lowPriceEl.style.color = '';
+                } else {
+                    lowPriceEl.style.color = 'red';
+                }
+
                 // Display chart image
                 displayChartImage(data.chartImage);
-                
+
                 // Display BestFourPoint text
                 displayBestFourPoint(data.bestFourPoint);
 
