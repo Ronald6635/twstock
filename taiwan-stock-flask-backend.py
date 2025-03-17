@@ -39,7 +39,7 @@ def generate_stock_chart(stock_id):
 # Route for the home page # 首頁路由
 @app.route('/')
 def home():
-    return render_template('taiwan-stock-frontend.html') # 渲染首頁模板
+    return render_template('taiwan-stock.html') # 渲染首頁模板
 
 # API endpoint to get stock data # API 接口，用於獲取股票數據
 @app.route('/api/stock/<stock_id>')
