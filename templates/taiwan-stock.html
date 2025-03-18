@@ -255,6 +255,57 @@
     </div>
 
     <script>
+        // Split into logical modules
+        const stockService = {
+            async getStockData(stockId) {
+                try {
+                    const response = await fetch(`/api/stock/${stockId}`);
+                    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+                    return await response.json();
+                } catch (error) {
+                    console.error('Error fetching stock data:', error);
+                    throw error;
+                }
+            }
+        };
+
+        const uiController = {
+            showLoading(show) {
+                document.getElementById('loading').style.display = show ? 'block' : 'none';
+            },
+            showError(message) {
+                const errorMsgEl = document.getElementById('errorMsg');
+                errorMsgEl.textContent = message;
+                errorMsgEl.style.display = 'block';
+            },
+            hideError() {
+                document.getElementById('errorMsg').style.display = 'none';
+            },
+            showStockInfo() {
+                document.getElementById('stockInfo').style.display = 'block';
+            },
+            hideStockInfo() {
+                document.getElementById('stockInfo').style.display = 'none';
+            }
+        };
+
+        const messages = {
+            'zh-TW': {
+                searchPlaceholder: '輸入股票代碼 (例如: 2330)',
+                serverError: '伺服器錯誤，請稍後再試',
+                // Other messages
+            },
+            'en': {
+                searchPlaceholder: 'Enter stock code (e.g., 2330)',
+                serverError: 'Server error, please try again later',
+                // Other messages
+            }
+        };
+
+        function isValidStockId(stockId) {
+            return /^\d{4,6}$/.test(stockId);
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             const searchBtn = document.getElementById('searchBtn');
             const stockIdInput = document.getElementById('stockId');
@@ -279,7 +330,7 @@
                 if (stockId) {
                     searchStock(stockId);
                 } else {
-                    showError('請輸入股票代碼');
+                    uiController.showError('請輸入股票代碼');
                 }
             });
             
@@ -290,37 +341,34 @@
                     if (stockId) {
                         searchStock(stockId);
                     } else {
-                        showError('請輸入股票代碼');
+                        uiController.showError('請輸入股票代碼');
                     }
                 }
             });
             
-            function searchStock(stockId) {
-                // Show loading
-                showLoading(true);
-                hideError();
-                hideStockInfo();
-                
-                // In a real application, this would call your Python backend
-                // For demonstration purposes, we'll simulate the API call
-                
-                // Make the actual API call to the Python backend
-                fetch('/api/stock/' + stockId)
-                    .then(response => response.json())
-                    .then(data => {
-                        showLoading(false);
-                        if (data.error) {
-                            showError(data.error);
-                        } else {
-                            displayStockData(data);
-                            renderChart(data.chartData);
-                        }
-                    })
-                    .catch(error => {
-                        showLoading(false);
-                        showError('伺服器錯誤，請稍後再試');
-                        console.error('Error fetching stock data:', error);
-                    });
+            // Better error handling with async/await
+            async function searchStock(stockId) {
+                if (!isValidStockId(stockId)) {
+                    uiController.showError('請輸入有效的股票代碼 / Please enter a valid stock ID');
+                    return;
+                }
+                try {
+                    uiController.showLoading(true);
+                    uiController.hideError();
+                    uiController.hideStockInfo();
+                    
+                    const data = await stockService.getStockData(stockId);
+                    if (data.error) {
+                        uiController.showError(data.error);
+                    } else {
+                        displayStockData(data);
+                        renderChart(data.chartData);
+                    }
+                } catch (error) {
+                    uiController.showError('伺服器錯誤，請稍後再試 / Server error, please try again');
+                } finally {
+                    uiController.showLoading(false);
+                }
             }
             
             function displayStockData(data) {
@@ -342,61 +390,61 @@
                 const highPriceEl = document.getElementById('highPrice');
                 highPriceEl.textContent = `NT$ ${data.highPrice}`;
 
-                if (parseFloat(data.highPrice) < parseFloat(data.openPrice)) {
-                    highPriceEl.style.color = 'green';
-                } else if (parseFloat(data.highPrice) == parseFloat(data.openPrice)) {
-                    highPriceEl.style.color = '';
-                } else {
-                    highPriceEl.style.color = 'red';
-                }
-
                 const lowPriceEl = document.getElementById('lowPrice');
                 lowPriceEl.textContent = `NT$ ${data.lowPrice}`;
 
-                if (parseFloat(data.lowPrice) < parseFloat(data.openPrice)) {
-                    lowPriceEl.style.color = 'green';
-                } else if (parseFloat(data.lowPrice) == parseFloat(data.openPrice)) {
-                    lowPriceEl.style.color = '';
-                } else {
-                    lowPriceEl.style.color = 'red';
+                // Helper function to set price colors
+                function setPriceColor(element, value, compareValue) {
+                    if (parseFloat(value) < parseFloat(compareValue)) {
+                        element.style.color = 'green';
+                    } else if (parseFloat(value) > parseFloat(compareValue)) {
+                        element.style.color = 'red';
+                    } else {
+                        element.style.color = '';
+                    }
                 }
 
-                // Display chart image
-                // generate_stock_chart() responses chartImage
-                // don't use now, but keep it
-                // displayChartImage(data.chartImage);
+                // Then use it in displayStockData
+                setPriceColor(highPriceEl, data.highPrice, data.openPrice);
+                setPriceColor(lowPriceEl, data.lowPrice, data.openPrice);
 
                 // Display BestFourPoint text
                 displayBestFourPoint(data.bestFourPoint);
 
                 // Show the stock info section
-                showStockInfo();
+                uiController.showStockInfo();
             }
             
+            function displayBestFourPoint(bestFourPoint) {
+                if (!bestFourPoint) return;
+                
+                const bestFourPointTextEl = document.getElementById('bestFourPointText');
+                bestFourPointTextEl.innerHTML = bestFourPoint;
+                
+                document.getElementById('stockBestFourPoint').style.display = 'block';
+            }
+
             function displayChartImage(chartImageBase64) {
                 const chartImageEl = document.getElementById('stockChartImage');
                 chartImageEl.src = `data:image/png;base64,${chartImageBase64}`;
                 chartImageEl.style.display = 'block';
             }
 
-            function displayBestFourPoint(bestFourPointText) {
-                const bestFourPointEl = document.getElementById('stockBestFourPoint');
-                const bestFourPointTextEl = document.getElementById('bestFourPointText');
-                if (bestFourPointText) {
-                    bestFourPointTextEl.textContent = bestFourPointText;
-                    bestFourPointEl.style.display = 'block';
-                } else {
-                    bestFourPointEl.style.display = 'none';
-                }
-            }
-
-
+            // Define currentChart variable
+            let currentChart = null;
+            
             function renderChart(chartData) {
                 const ctx = document.getElementById('stockChart').getContext('2d');
+                
+                // Destroy previous chart if exists
+                if (currentChart) {
+                    currentChart.destroy();
+                }
+                
                 const labels = chartData.map(item => item.dates);
                 const values = chartData.map(item => item.prices);
-
-                new Chart(ctx, {
+                
+                currentChart = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: labels,
@@ -419,50 +467,6 @@
                     }
                 });
             }
-        
-            function showLoading(show) {
-                loadingEl.style.display = show ? 'block' : 'none';
-            }
-        
-            function showError(message) {
-                errorMsgEl.textContent = message;
-                errorMsgEl.style.display = 'block';
-            }
-        
-            function hideError() {
-                errorMsgEl.style.display = 'none';
-            }
-        
-            function showStockInfo() {
-                stockInfoEl.style.display = 'block';
-            }
-        
-            function hideStockInfo() {
-                stockInfoEl.style.display = 'none';
-            }
-        
-            function getStockName(stockId) {
-                // Mock function to return stock name based on stock ID
-                const stockNames = {
-                    '2330': '台積電',
-                    '2317': '鴻海',
-                    '0050': '元大台灣50',
-                    '2412': '中華電'
-                };
-                return stockNames[stockId] || 'Unknown';
-            }
-        
-            function getIndustryName(stockId) {
-                // Mock function to return industry name based on stock ID
-                const industryNames = {
-                    '2330': '半導體',
-                    '2317': '電子零組件',
-                    '0050': 'ETF',
-                    '2412': '電信服務'
-                };
-                return industryNames[stockId] || 'Unknown';
-            }
-        
         });
     </script>
 </body>
