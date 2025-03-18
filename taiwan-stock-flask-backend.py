@@ -29,12 +29,12 @@ def generate_stock_chart(stock_id):
     plt.grid(True) # 顯示網格
     plt.tight_layout() # 調整佈局
 
-    img_stream = io.BytesIO() # 創建內存 IO 對象
-    plt.savefig(img_stream, format='png') # 將圖表保存到內存 IO 對象
-    img_stream.seek(0) # 將指針移動到 IO 對象的開頭
-    img_base64 = base64.b64encode(img_stream.read()).decode('utf-8') # 將 IO 對象中的數據編碼為 base64 字符串
+    # img_stream = io.BytesIO() # 創建內存 IO 對象
+    # plt.savefig(img_stream, format='png') # 將圖表保存到內存 IO 對象
+    # img_stream.seek(0) # 將指針移動到 IO 對象的開頭
+    # img_base64 = base64.b64encode(img_stream.read()).decode('utf-8') # 將 IO 對象中的數據編碼為 base64 字符串
     plt.close() # 關閉圖表
-    return img_base64 # 返回 base64 編碼的圖表數據
+    return {'dates': dates, 'prices': prices} # 返回 JSON 格式的圖表數據
 
 # Route for the home page # 首頁路由
 @app.route('/')
@@ -63,8 +63,8 @@ def get_stock_data(stock_id):
         price_change = round(((float(current_price) - float(stock.price[-2])) / float(stock.price[-2])) * 100, 2) # 計算價格變動百分比
 
         # Generate chart data # 產生圖表數據
-        chart_data = [{'date': str(d.date).split(' ')[0], 'value': d.close} for d in stock.data] # 提取日期和收盤價，用於繪製圖表
-        chart_image_base64 = generate_stock_chart(stock_id) # 產生圖表 base64 數據
+        chart_data = generate_stock_chart(stock_id) # 產生圖表 base64 數據
+        # chart_image_base64 = generate_stock_chart(stock_id) # 產生圖表 base64 數據
 
         # BestFourPoint analysis # BestFourPoint 分析
         bfp = twstock.BestFourPoint(stock) # 創建 BestFourPoint 實例
@@ -84,7 +84,7 @@ def get_stock_data(stock_id):
             'lowPrice': low_price, # 最低價
             'volume': volume, # 成交量
             'chartData': chart_data, # 圖表數據
-            'chartImage': chart_image_base64, # 圖表 base64 數據
+            'chartImage': chart_data, # 圖表 base64 數據
             'bestFourPoint': best_four_point_str # BestFourPoint 分析結果
         }
 

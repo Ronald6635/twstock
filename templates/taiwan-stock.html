@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>台灣股票市場分析工具</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
             font-family: "Microsoft JhengHei", Arial, sans-serif;
@@ -243,7 +244,7 @@
 
         <div class="result-section">
             <div class="chart-container" id="chartContainer">
-                <!-- Chart will be rendered here -->
+                <canvas id="stockChart"></canvas>
                 <img id="stockChartImage" src="" style="width:100%; height:100%; display:none;">
             </div>
              <div class="stock-info" id="stockBestFourPoint" style="display: none;">
@@ -312,6 +313,9 @@
                             showError(data.error);
                         } else {
                             displayStockData(data);
+                            // Render chart with mock data
+                            const chartData = generateMockChartData();
+                            renderChart(chartData);
                         }
                     })
                     .catch(error => {
@@ -388,74 +392,33 @@
 
 
             function renderChart(chartData) {
-                // This is a placeholder for actual chart rendering
-                // In a real application, you would use a charting library like Chart.js
-                
-                // For this demonstration, we'll just create a simple visualization
-                chartContainerEl.innerHTML = '';
-                
-                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                svg.setAttribute('width', '100%');
-                svg.setAttribute('height', '100%');
-                svg.setAttribute('viewBox', '0 0 1000 400');
-                
-                // Find min and max values for scaling
-                const values = chartData.map(point => point.value);
-                const maxValue = Math.max(...values);
-                const minValue = Math.min(...values);
-                const range = maxValue - minValue;
-                
-                // Create path
-                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                let pathData = '';
-                
-                chartData.forEach((point, index) => {
-                    const x = (index / (chartData.length - 1)) * 1000;
-                    const y = 400 - ((point.value - minValue) / range) * 350 - 25;
-                    
-                    if (index === 0) {
-                        pathData += `M ${x} ${y}`;
-                    } else {
-                        pathData += ` L ${x} ${y}`;
+                const ctx = document.getElementById('stockChart').getContext('2d');
+                const labels = chartData.map(item => item.date);
+                const values = chartData.map(item => item.value);
+
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '股價',
+                            data: values,
+                            borderColor: '#3498db',
+                            borderWidth: 1,
+                            fill: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: false
+                            }
+                        }
                     }
                 });
-                
-                path.setAttribute('d', pathData);
-                path.setAttribute('stroke', '#3498db');
-                path.setAttribute('stroke-width', '3');
-                path.setAttribute('fill', 'none');
-                
-                svg.appendChild(path);
-                
-                // Add area fill below the line
-                const areaPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                let areaPathData = pathData;
-                areaPathData += ` L ${1000} ${400}`;
-                areaPathData += ` L ${0} ${400}`;
-                areaPathData += ' Z';
-                
-                areaPath.setAttribute('d', areaPathData);
-                areaPath.setAttribute('fill', 'rgba(52, 152, 219, 0.1)');
-                
-                svg.insertBefore(areaPath, path);
-                
-                // Add axes
-                const xAxis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                xAxis.setAttribute('x1', '0');
-                xAxis.setAttribute('y1', '375');
-                xAxis.setAttribute('x2', '1000');
-                xAxis.setAttribute('y2', '375');
-                xAxis.setAttribute('stroke', '#ccc');
-                xAxis.setAttribute('stroke-width', '1');
-                
-                svg.appendChild(xAxis);
-                
-                // Add some labels
-                for (let i = 0; i < chartData.length; i += Math.ceil(chartData.length / 5)) {
-                    const x = (i / (chartData.length - 1)) * 1000;
-                }
             }
-        
         
             function showLoading(show) {
                 loadingEl.style.display = show ? 'block' : 'none';
