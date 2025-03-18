@@ -1,3 +1,78 @@
+"""
+Taiwan Stock Flask Backend Application
+This Flask application provides a backend service for retrieving and analyzing Taiwan stock market data.
+It utilizes the twstock library to fetch real-time and historical stock information, performs basic analysis,
+and generates visualizations.
+The application exposes the following endpoints:
+- '/' : Main page that renders the frontend interface
+- '/api/stock/<stock_id>' : API endpoint that provides detailed stock information including:
+    - Current price, open price, high/low prices
+    - Price change percentage
+    - Historical price data for charting
+    - BestFourPoint analysis for investment recommendation
+Features:
+- Real-time stock data retrieval
+- Historical price tracking (last 30 days)
+- Price change calculation
+- Stock price visualization
+- BestFourPoint analysis for investment decisions
+Dependencies:
+- Flask: Web framework
+- pandas: Data processing
+- numpy: Numerical operations
+- twstock: Taiwan stock market data
+- matplotlib: Data visualization
+- io, base64: Image handling
+"""
+"""
+Generate a line chart of a stock's closing prices for the last 30 days.
+Parameters:
+----------
+stock_id : str
+        The Taiwan stock ID code (e.g., '2330' for TSMC)
+Returns:
+-------
+str
+        Base64 encoded PNG image of the stock price chart
+Notes:
+-----
+The function creates a matplotlib figure showing the closing price
+trend for the specified stock over the last 30 days.
+"""
+"""
+Render the home page of the application.
+Returns:
+-------
+str
+        Rendered HTML template for the Taiwan stock interface
+"""
+"""
+Retrieve comprehensive stock information for the specified stock ID.
+Parameters:
+----------
+stock_id : str
+        The Taiwan stock ID code (e.g., '2330' for TSMC)
+Returns:
+-------
+flask.Response
+        JSON response containing detailed stock information including:
+        - Basic info (ID, name)
+        - Current trading data (price, open, high, low, volume)
+        - Price change percentage
+        - Historical price data for the last 30 days
+        - BestFourPoint investment recommendation
+Error Responses:
+--------------
+500:
+        If real-time data cannot be retrieved or any other exception occurs
+        during data processing
+Notes:
+-----
+This function fetches both historical and real-time data from the twstock
+library and performs calculations to determine price changes and investment
+recommendations.
+"""
+
 from flask import Flask, render_template, jsonify, request # 導入 Flask 相關模組
 import pandas as pd # 導入 pandas 模組，用於數據處理
 import numpy as np # 導入 numpy 模組，用於數值計算
