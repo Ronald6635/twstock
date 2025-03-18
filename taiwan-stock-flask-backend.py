@@ -5,6 +5,8 @@ import os # 導入 os 模組，用於操作系統相關功能
 import json # 導入 json 模組，用於處理 JSON 數據
 from datetime import datetime, timedelta # 導入 datetime 模組，用於處理日期和時間
 import twstock # 導入 twstock 模組，用於台灣股市數據
+import matplotlib
+matplotlib.use('Agg') # Set backend to Agg to avoid GUI issues
 import matplotlib.pyplot as plt # 導入 matplotlib 模組，用於繪圖
 import io # 導入 io 模組，用於處理輸入輸出流
 import base64 # 導入 base64 模組，用於 base64 編碼
@@ -104,7 +106,7 @@ def get_stock_data(stock_id):
             'lowPrice': low_price, # 最低價
             'volume': volume, # 成交量
             'chartData': chart_data, # 圖表數據
-            'chartImage': chart_image_base64, # 圖表 base64 數據
+            # 'chartImage': chart_image_base64, # 圖表 base64 數據
             'bestFourPoint': best_four_point_str # BestFourPoint 分析結果
         }
 
