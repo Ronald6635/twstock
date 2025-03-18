@@ -51,16 +51,26 @@ def get_stock_data(stock_id):
         # Get realtime data # 獲取實時數據
         realtime = twstock.realtime.get(stock_id) # 獲取股票實時數據
         if realtime['success']: # 判斷是否獲取成功
-            current_price = realtime['realtime']['latest_trade_price'] # 獲取最新成交價
-            open_price = realtime['realtime']['open'] # 獲取開盤價
-            high_price = realtime['realtime']['high'] # 獲取最高價
-            low_price = realtime['realtime']['low'] # 獲取最低價
-            volume = realtime['realtime']['accumulate_trade_volume'] # 獲取累計成交量
+            current_price_str = realtime['realtime']['latest_trade_price'] # 獲取最新成交價
+            open_price_str = realtime['realtime']['open'] # 獲取開盤價
+            high_price_str = realtime['realtime']['high'] # 獲取最高價
+            low_price_str = realtime['realtime']['low'] # 獲取最低價
+            volume_str = realtime['realtime']['accumulate_trade_volume'] # 獲取累計成交量
+
+            current_price = float(current_price_str) if current_price_str != '-' else None
+            open_price = float(open_price_str) if open_price_str != '-' else None
+            high_price = float(high_price_str) if high_price_str != '-' else None
+            low_price = float(low_price_str) if low_price_str != '-' else None
+            volume = int(volume_str) if volume_str != '-' else None
         else:
             return jsonify({'error': '無法取得即時股價資訊'}), 500 # 返回錯誤信息
 
         # Calculate price change # 計算價格變動
-        price_change = round(((float(current_price) - float(stock.price[-2])) / float(stock.price[-2])) * 100, 2) # 計算價格變動百分比
+        previous_price = stock.price[-2] if len(stock.price) > 1 else None
+        if current_price is not None and previous_price is not None and previous_price != '-':
+            price_change = round(((current_price - float(previous_price)) / float(previous_price)) * 100, 2) # 計算價格變動百分比
+        else:
+            price_change = None
 
         # Generate chart data # 產生圖表數據
         chart_data = generate_stock_chart(stock_id) # 產生圖表 base64 數據
