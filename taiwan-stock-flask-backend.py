@@ -66,7 +66,9 @@ def get_stock_data(stock_id):
             low_price = float(low_price_str) if low_price_str != '-' else None
             volume = int(volume_str) if volume_str != '-' else None
         else:
-            return jsonify({'error': '無法取得即時股價資訊'}), 500 # 返回錯誤信息
+            error_message = f"無法取得即時股價資訊: {realtime['msg']}"
+            print(error_message)
+            return jsonify({'error': error_message}), 500  # 返回錯誤信息
 
         # Calculate price change # 計算價格變動
         previous_price = stock.price[-2] if len(stock.price) > 1 else None
@@ -77,12 +79,12 @@ def get_stock_data(stock_id):
         else:
             price_change = None
 
-        dates = [d.strftime("%Y-%m-%d") for d in stock.date[-30:]] # Limit to last 30 days for chart
-        prices = stock.price[-30:] # 提取股價，限制為最近 30 天
-        
-        # Generate chart data # 產生圖表數據
-        chart_data = {'dates': dates, 'prices': prices}
-        chart_image_base64 = generate_stock_chart(stock_id) # 產生圖表 base64 數據
+        dates = [d.strftime("%Y-%m-%d") for d in stock.date[-30:]]  # Limit to last 30 days for chart
+        prices = stock.price[-30:]  # 提取股價，限制為最近 30 天
+
+        # Generate chart data in the format expected by the frontend
+        chart_data = [{'dates': date, 'prices': price} for date, price in zip(dates, prices)]
+        chart_image_base64 = generate_stock_chart(stock_id)  # 產生圖表 base64 數據
 
         # BestFourPoint analysis # BestFourPoint 分析
         bfp = twstock.BestFourPoint(stock) # 創建 BestFourPoint 實例
