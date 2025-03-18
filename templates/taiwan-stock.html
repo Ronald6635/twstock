@@ -313,9 +313,7 @@
                             showError(data.error);
                         } else {
                             displayStockData(data);
-                            // Render chart with mock data
-                            const chartData = generateMockChartData();
-                            renderChart(chartData);
+                            renderChart(data.chartData);
                         }
                     })
                     .catch(error => {
@@ -364,7 +362,9 @@
                 }
 
                 // Display chart image
-                displayChartImage(data.chartImage);
+                // generate_stock_chart() responses chartImage
+                // don't use now, but keep it
+                // displayChartImage(data.chartImage);
 
                 // Display BestFourPoint text
                 displayBestFourPoint(data.bestFourPoint);
@@ -393,8 +393,8 @@
 
             function renderChart(chartData) {
                 const ctx = document.getElementById('stockChart').getContext('2d');
-                const labels = chartData.map(item => item.date);
-                const values = chartData.map(item => item.value);
+                const labels = chartData.map(item => item.dates);
+                const values = chartData.map(item => item.prices);
 
                 new Chart(ctx, {
                     type: 'line',
@@ -463,20 +463,6 @@
                 return industryNames[stockId] || 'Unknown';
             }
         
-            function generateMockChartData() {
-                // Generate mock chart data for demonstration
-                const chartData = [];
-                const today = new Date();
-                for (let i = 90; i >= 0; i--) {
-                    const date = new Date(today);
-                    date.setDate(today.getDate() - i);
-                    chartData.push({
-                        date: date.toISOString().slice(0, 10),
-                        value: Math.floor(Math.random() * 200) + 100
-                    });
-                }
-                return chartData;
-            }
         });
     </script>
 </body>

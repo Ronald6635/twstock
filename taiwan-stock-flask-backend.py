@@ -29,12 +29,12 @@ def generate_stock_chart(stock_id):
     plt.grid(True) # 顯示網格
     plt.tight_layout() # 調整佈局
 
-    # img_stream = io.BytesIO() # 創建內存 IO 對象
-    # plt.savefig(img_stream, format='png') # 將圖表保存到內存 IO 對象
-    # img_stream.seek(0) # 將指針移動到 IO 對象的開頭
-    # img_base64 = base64.b64encode(img_stream.read()).decode('utf-8') # 將 IO 對象中的數據編碼為 base64 字符串
+    img_stream = io.BytesIO() # 創建內存 IO 對象
+    plt.savefig(img_stream, format='png') # 將圖表保存到內存 IO 對象
+    img_stream.seek(0) # 將指針移動到 IO 對象的開頭
+    img_base64 = base64.b64encode(img_stream.read()).decode('utf-8') # 將 IO 對象中的數據編碼為 base64 字符串
     plt.close() # 關閉圖表
-    return {'dates': dates, 'prices': prices} # 返回 JSON 格式的圖表數據
+    return img_base64 # 返回 base64 編碼的圖表數據
 
 # Route for the home page # 首頁路由
 @app.route('/')
@@ -51,11 +51,14 @@ def get_stock_data(stock_id):
         # Get realtime data # 獲取實時數據
         realtime = twstock.realtime.get(stock_id) # 獲取股票實時數據
         if realtime['success']: # 判斷是否獲取成功
+            print(f'Real Time information of {stock_id}:\n{realtime['realtime']}')
             current_price_str = realtime['realtime']['latest_trade_price'] # 獲取最新成交價
             open_price_str = realtime['realtime']['open'] # 獲取開盤價
             high_price_str = realtime['realtime']['high'] # 獲取最高價
             low_price_str = realtime['realtime']['low'] # 獲取最低價
             volume_str = realtime['realtime']['accumulate_trade_volume'] # 獲取累計成交量
+            print(f'open_price_str:\ntype is {type(open_price_str)} and the content is {open_price_str}')
+            print(f'current_price_str:\ntype is {type(current_price_str)} and the content is {current_price_str}')
 
             current_price = float(current_price_str) if current_price_str != '-' else None
             open_price = float(open_price_str) if open_price_str != '-' else None
@@ -67,14 +70,19 @@ def get_stock_data(stock_id):
 
         # Calculate price change # 計算價格變動
         previous_price = stock.price[-2] if len(stock.price) > 1 else None
-        if current_price is not None and previous_price is not None and previous_price != '-':
-            price_change = round(((current_price - float(previous_price)) / float(previous_price)) * 100, 2) # 計算價格變動百分比
+        print(f'previous_price:\ntype is {type(previous_price)} and the content is {previous_price}')
+       
+        if current_price is not None and previous_price is not None:
+            price_change = round(((current_price - previous_price) / previous_price) * 100, 2) # 計算價格變動百分比
         else:
             price_change = None
 
+        dates = [d.strftime("%Y-%m-%d") for d in stock.date[-30:]] # Limit to last 30 days for chart
+        prices = stock.price[-30:] # 提取股價，限制為最近 30 天
+        
         # Generate chart data # 產生圖表數據
-        chart_data = generate_stock_chart(stock_id) # 產生圖表 base64 數據
-        # chart_image_base64 = generate_stock_chart(stock_id) # 產生圖表 base64 數據
+        chart_data = {'dates': dates, 'prices': prices}
+        chart_image_base64 = generate_stock_chart(stock_id) # 產生圖表 base64 數據
 
         # BestFourPoint analysis # BestFourPoint 分析
         bfp = twstock.BestFourPoint(stock) # 創建 BestFourPoint 實例
@@ -94,7 +102,7 @@ def get_stock_data(stock_id):
             'lowPrice': low_price, # 最低價
             'volume': volume, # 成交量
             'chartData': chart_data, # 圖表數據
-            'chartImage': chart_data, # 圖表 base64 數據
+            'chartImage': chart_image_base64, # 圖表 base64 數據
             'bestFourPoint': best_four_point_str # BestFourPoint 分析結果
         }
 
