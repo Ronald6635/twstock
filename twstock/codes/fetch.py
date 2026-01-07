@@ -28,7 +28,7 @@ def make_row_tuple(typ, row):
 
 
 def fetch_data(url):
-    r = requests.get(url, proxies=get_proxies())
+    r = requests.get(url, proxies=get_proxies(), verify=False)
     root = etree.HTML(r.text)
     trs = root.xpath("//tr")[1:]
 

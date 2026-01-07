@@ -86,6 +86,9 @@ import matplotlib.pyplot as plt # 導入 matplotlib 模組，用於繪圖
 import io # 導入 io 模組，用於處理輸入輸出流
 import base64 # 導入 base64 模組，用於 base64 編碼
 
+import warnings
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
 app = Flask(__name__, static_folder='static', template_folder='templates') # 創建 Flask 應用實例，指定靜態文件夾和模板文件夾
 
 # 產生股票圖表
@@ -121,36 +124,55 @@ def home():
 # API endpoint to get stock data # API 接口，用於獲取股票數據
 @app.route('/api/stock/<stock_id>')
 def get_stock_data(stock_id):
+    """
+    API endpoint to retrieve stock data for a given stock ID.
+    
+    Args:
+        stock_id (str): The stock identifier (e.g., '2330').
+    
+    Returns:
+        dict: JSON response with stock data or error message.
+    """
     try:
-        stock = twstock.Stock(stock_id) # 創建股票實例
+        stock = twstock.Stock(stock_id)  # Create stock instance
         stock.fetch_31() # 獲取最近 31 天的股票數據
 
         # Get realtime data # 獲取實時數據
         realtime = twstock.realtime.get(stock_id) # 獲取股票實時數據
-        if realtime['success']: # 判斷是否獲取成功
-            print(f'Real Time information of {stock_id}:\n{realtime['realtime']}')
-            current_price_str = realtime['realtime']['latest_trade_price'] # 獲取最新成交價
-            open_price_str = realtime['realtime']['open'] # 獲取開盤價
-            high_price_str = realtime['realtime']['high'] # 獲取最高價
-            low_price_str = realtime['realtime']['low'] # 獲取最低價
-            volume_str = realtime['realtime']['accumulate_trade_volume'] # 獲取累計成交量
-            print(f'open_price_str:\ntype is {type(open_price_str)} and the content is {open_price_str}')
-            print(f'current_price_str:\ntype is {type(current_price_str)} and the content is {current_price_str}')
-
-            current_price = float(current_price_str) if current_price_str != '-' else None
-            open_price = float(open_price_str) if open_price_str != '-' else None
-            high_price = float(high_price_str) if high_price_str != '-' else None
-            low_price = float(low_price_str) if low_price_str != '-' else None
-            volume = int(volume_str) if volume_str != '-' else None
-        else:
-            error_message = f"無法取得即時股價資訊: {realtime['msg']}"
-            print(error_message)
-            return jsonify({'error': error_message}), 500  # 返回錯誤信息
-
+        if not realtime.get('success', False):
+            return jsonify({'error': f'Failed to fetch realtime data for {stock_id}'}), 500
+        
+        realtime_data = realtime['realtime']
+        print(f'Real Time information of {stock_id}:\n{realtime_data}')
+        
+        # Safely extract and convert prices (handle '-' or invalid values)
+        def safe_float(value):
+            """Safely convert string to float, returning None if invalid."""
+            try:
+                return float(value) if value != '-' else None
+            except (ValueError, TypeError):
+                return None
+        
+        def safe_int(value):
+            """Safely convert string to int, returning None if invalid."""
+            try:
+                return int(value) if value != '-' else None
+            except (ValueError, TypeError):
+                return None
+        
+        current_price = safe_float(realtime_data.get('latest_trade_price', '-'))
+        open_price = safe_float(realtime_data.get('open', '-'))
+        high_price = safe_float(realtime_data.get('high', '-'))
+        low_price = safe_float(realtime_data.get('low', '-'))
+        volume = safe_int(realtime_data.get('accumulate_trade_volume', '-'))
+        
+        print(f'open_price: type is {type(open_price)} and content is {open_price}')
+        print(f'current_price: type is {type(current_price)} and content is {current_price}')
+        
         # Calculate price change # 計算價格變動
         previous_price = stock.price[-2] if len(stock.price) > 1 else None
         print(f'previous_price:\ntype is {type(previous_price)} and the content is {previous_price}')
-       
+        
         if current_price is not None and previous_price is not None:
             price_change = round(((current_price - previous_price) / previous_price) * 100, 2) # 計算價格變動百分比
         else:
@@ -168,10 +190,9 @@ def get_stock_data(stock_id):
         best_four_point = bfp.best_four_point() # 獲取 BestFourPoint 分析結果
         best_four_point_str = best_four_point[1] if best_four_point else None # 提取 BestFourPoint 分析結果字符串
 
-
         response_data = {
             'id': stock_id, # 股票代碼
-            'name': realtime['info']['name'], # 股票名稱
+            'name': realtime.get('info', {}).get('name', 'Unknown'), # 股票名稱
             'industry': '',  # Not available in twstock # 行業信息，twstock 中沒有提供
             'description': '',  # Not available in twstock # 描述信息，twstock 中沒有提供
             'currentPrice': current_price, # 最新成交價
@@ -188,7 +209,14 @@ def get_stock_data(stock_id):
         return jsonify(response_data) # 返回 JSON 格式的響應數據
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500 # 返回錯誤信息
+        app.logger.error(f'Error fetching data for {stock_id}: {str(e)}')
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500 # 返回錯誤信息
+    except TypeError as e:
+        if 'Data.__new__()' in str(e):
+            app.logger.error(f'Data structure mismatch for {stock_id}: {str(e)}')
+            return jsonify({'error': f'Data format issue for {stock_id}. Try updating twstock.'}), 500
+        else:
+            raise  # Re-raise other TypeErrors
 
 # You might want to add more routes for other features # 你可能需要添加更多路由來實現其他功能
 

@@ -38,6 +38,7 @@ DATATUPLE = namedtuple(
         "close",
         "change",
         "transaction",
+        "extra",
     ],
 )
 
@@ -66,7 +67,7 @@ class TWSEFetcher(BaseFetcher):
     def fetch(self, year: int, month: int, sid: str, retry: int = 5):
         params = {"date": "%d%02d01" % (year, month), "stockNo": sid}
         for retry_i in range(retry):
-            r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies())
+            r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies(), verify=False)
             try:
                 data = r.json()
             except JSONDecodeError:
@@ -113,7 +114,7 @@ class TPEXFetcher(BaseFetcher):
     def fetch(self, year: int, month: int, sid: str, retry: int = 5):
         params = {"d": "%d/%d" % (year - 1911, month), "stkno": sid}
         for retry_i in range(retry):
-            r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies())
+            r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies(), verify=False)
             try:
                 data = r.json()
             except JSONDecodeError:

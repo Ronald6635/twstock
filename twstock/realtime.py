@@ -72,12 +72,13 @@ def _join_stock_id(stocks) -> str:
 
 def get_raw(stocks) -> dict:
     req = requests.Session()
-    req.get(SESSION_URL, proxies=get_proxies())
+    req.get(SESSION_URL, proxies=get_proxies(), verify=False)
 
     r = req.get(
         STOCKINFO_URL.format(
             stock_id=_join_stock_id(stocks), time=int(time.time()) * 1000
-        )
+        ),
+        verify=False
     )
 
     if sys.version_info < (3, 5):
