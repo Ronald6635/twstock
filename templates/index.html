@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣證券交易所股票網路應用</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1>台灣證券交易所股票網路應用</h1>
+        
+        <div style="margin-bottom: 20px;">
+            <a href="/finmind_api" style="display: inline-block; padding: 10px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; margin-right: 10px;">🔗 FinMind API 完整測試</a>
+            <span style="color: #666; font-size: 14px;">支援 45 種免費 API 資料集的完整測試介面</span>
+        </div>
+        
+        <div id="user-info" style="margin-bottom: 20px; padding: 10px; background-color: #f0f0f0; border-radius: 4px;">
+            FinMind 使用統計: <span id="usage">載入中...</span>
+        </div>
+        
+        <div class="controls">
+            <select id="api-select">
+                <option value="stock">股票資料 (歷史)</option>
+                <option value="realtime">即時資料</option>
+                <option value="analytics">分析資料</option>
+                <option value="codes">股票代碼</option>
+                <option value="finmind">FinMind (台灣股票價格 - 日線)</option>
+                <option value="finmind_per">FinMind (台灣股票本益比 - 本益比/淨值比)</option>
+                <option value="finmind_institutional">FinMind (台灣股票法人買賣 - 法人投資)</option>
+                <option value="finmind_margin">FinMind (台灣股票融資融券 - 融資券)</option>
+                <option value="finmind_revenue">FinMind (台灣股票月營收 - 月營收)</option>
+                <option value="finmind_weekly">FinMind (台灣股票價格 - 週線)</option>
+                <option value="finmind_monthly">FinMind (台灣股票價格 - 月線)</option>
+            </select>
+            <input type="text" id="stock-id" placeholder="輸入股票代碼 (例如: 2330)" value="2330">
+            <button id="fetch-btn">取得資料</button>
+            <label><input type="checkbox" id="auto-refresh"> 每10秒自動更新</label>
+        </div>
+
+        <div id="data-display">
+            <!-- Data will be displayed here -->
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
