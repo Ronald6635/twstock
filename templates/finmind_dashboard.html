@@ -39,6 +39,11 @@
         <div class="chart-container" style="margin-top: 30px; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
             {{ chart_html|safe }}
         </div>
+        <div style="text-align:center; margin-top:10px;">
+            <label style="margin-right:8px;"><input type="checkbox" id="force_refresh"> 強制重新抓取（force refresh）</label>
+            <button id="save_button" type="button" style="padding: 8px 18px;">💾 存檔</button>
+            <span id="save_status" style="margin-left:12px; color:#333;"></span>
+        </div>
         <p style="text-align:center; color:#666; font-size:0.9em; margin-top:8px;">平均月營收/交易日 = 月營收 ÷ 該月份的交易日數（僅計算有交易日的月份）</p>
         {% endif %}
     </div>
@@ -61,6 +66,44 @@
         }
         loadUserInfo();
         setInterval(loadUserInfo, 30000);
+
+        // Save dashboard datasets (combined JSON + CSV)
+        async function saveDashboard() {
+            const statusEl = document.getElementById('save_status');
+            const btn = document.getElementById('save_button');
+            try {
+                btn.disabled = true;
+                statusEl.textContent = '儲存中...';
+                const payload = {
+                    stock_id: document.getElementById('stock_id').value,
+                    start_date: document.getElementById('start_date').value,
+                    end_date: document.getElementById('end_date').value,
+                    force_refresh: document.getElementById('force_refresh').checked
+                };
+                const resp = await fetch('/api/finmind/save_dashboard', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    const files = (data.files || []).map(f => f.split('/').pop()).join(', ');
+                    statusEl.textContent = files ? `已存檔: ${files}` : '已存檔';
+                } else {
+                    statusEl.textContent = '存檔失敗: ' + (data.error || resp.status);
+                }
+            } catch (e) {
+                console.error(e);
+                statusEl.textContent = '存檔錯誤';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function(){
+            const saveBtn = document.getElementById('save_button');
+            if (saveBtn) saveBtn.addEventListener('click', saveDashboard);
+        });
     </script>
 </body>
 </html>

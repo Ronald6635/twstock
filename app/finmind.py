@@ -22,7 +22,7 @@ import requests
 from datetime import datetime, timedelta
 from FinMind.data import DataLoader
 import pandas as pd
-from .utils import save_data_to_datasets, generate_stock_chart, generate_kline_chart, load_data_from_datasets, generate_plotly_kline_chart
+from .utils import save_data_to_datasets, generate_stock_chart, generate_kline_chart, load_data_from_datasets, generate_plotly_kline_chart, write_combined_files
 from typing import Dict, List, Any, Optional
 
 bp = Blueprint('finmind', __name__)
@@ -1729,3 +1729,139 @@ def finmind_dashboard() -> str:
     # Default values for GET
     default_end = datetime.now().strftime('%Y-%m-%d')
     return render_template('finmind_dashboard.html', stock_id='2379', start_date='2025-01-01', end_date=default_end)
+
+
+@bp.route('/api/finmind/save_dashboard', methods=['POST'])
+def save_dashboard():
+    """Save combined datasets (JSON + CSV) for the dashboard's selected stock/date-range.
+
+    Payload: { stock_id, start_date, end_date, force_refresh (optional bool) }
+    """
+    try:
+        payload = request.get_json() or {}
+        stock_id = payload.get('stock_id')
+        start_date = payload.get('start_date')
+        end_date = payload.get('end_date')
+        force_refresh = bool(payload.get('force_refresh', False))
+
+        if not (stock_id and start_date and end_date):
+            return jsonify({'error': 'stock_id/start_date/end_date required'}), 400
+
+        api_key = os.getenv('FINMIND_API_KEY')
+        api = None
+        if api_key:
+            api = DataLoader()
+            api.login_by_token(api_token=api_key)
+        else:
+            if force_refresh:
+                return jsonify({'error': 'FinMind API 金鑰未設定 (force_refresh requested)'}), 500
+
+        # Determine company name
+        try:
+            import twstock
+            company = twstock.codes.get(stock_id).name if stock_id in twstock.codes else stock_id
+        except Exception:
+            company = stock_id
+
+        api_names = [
+            'finmind_taiwan_stock_price',
+            'finmind_institutional',
+            'finmind_margin',
+            'finmind_revenue'
+        ]
+
+        combined = {
+            'meta': {
+                'stock_id': stock_id,
+                'company': company,
+                'start_date': start_date,
+                'end_date': end_date,
+                'created_at': datetime.utcnow().isoformat() + 'Z',
+                'saved_by': 'user:web',
+                'api_names': api_names
+            },
+            'datasets': {}
+        }
+
+        results = {}
+        for api_name in api_names:
+            data = None
+            if not force_refresh:
+                data = load_data_from_datasets(stock_id, api_name, start_date, end_date)
+            source = 'cache' if data is not None else None
+
+            if data is None:
+                if not api:
+                    results[api_name] = {'ok': False, 'error': 'no cache and no FINMIND API key'}
+                    continue
+                try:
+                    if api_name == 'finmind_taiwan_stock_price':
+                        df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                        df.rename(columns={'max': 'high', 'min': 'low', 'Trading_Volume': 'volume'}, inplace=True)
+                    elif api_name == 'finmind_institutional':
+                        df = api.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                    elif api_name == 'finmind_margin':
+                        df = api.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                    elif api_name == 'finmind_revenue':
+                        df = api.taiwan_stock_month_revenue(stock_id=stock_id, start_date=start_date)
+
+                    data = df.to_dict(orient='records')
+                    save_data_to_datasets(stock_id, data, api_name, start_date, end_date)
+                    source = 'finmind'
+                except Exception as e:
+                    results[api_name] = {'ok': False, 'error': str(e)}
+                    continue
+
+            combined['datasets'][api_name] = {'source': source or 'cache', 'cached': source == 'cache', 'records': data}
+            results[api_name] = {'ok': True}
+
+        # Derive monthly aggregates for revenue (cc. generate_plotly_kline_chart)
+        try:
+            revenue_ds = combined['datasets'].get('finmind_revenue', {})
+            rev_records = revenue_ds.get('records') or []
+            if rev_records:
+                df_rev = pd.DataFrame(rev_records)
+                if 'revenue_year' in df_rev.columns and 'revenue_month' in df_rev.columns:
+                    df_rev['year_month'] = pd.to_datetime(df_rev['revenue_year'].astype(str) + '-' + df_rev['revenue_month'].astype(str) + '-01').dt.to_period('M')
+                elif 'date' in df_rev.columns:
+                    df_rev['date'] = pd.to_datetime(df_rev['date'])
+                    df_rev['year_month'] = df_rev['date'].dt.to_period('M')
+
+                df_price = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date) or []
+                df_price = pd.DataFrame(df_price)
+                if not df_price.empty:
+                    df_price['date'] = pd.to_datetime(df_price['date'])
+                    df_price['year_month'] = df_price['date'].dt.to_period('M')
+                    td = df_price.groupby('year_month').size().reset_index(name='trading_days')
+                else:
+                    td = pd.DataFrame(columns=['year_month', 'trading_days'])
+
+                if 'revenue' in df_rev.columns:
+                    df_rev_grouped = df_rev.groupby('year_month', as_index=False).agg({'revenue': 'sum'})
+                    df_rev_grouped = pd.merge(df_rev_grouped, td, on='year_month', how='left')
+                    df_rev_grouped['est_flag'] = df_rev_grouped['trading_days'].isna()
+                    df_rev_grouped['trading_days'] = df_rev_grouped['trading_days'].fillna(0).astype(int)
+                    df_rev_grouped['avg_per_trading_day'] = df_rev_grouped.apply(lambda r: (r['revenue'] / r['trading_days']) if r['trading_days'] and r['trading_days'] > 0 else None, axis=1)
+
+                    monthly = []
+                    for _, r in df_rev_grouped.iterrows():
+                        monthly.append({
+                            'year_month': str(r['year_month']),
+                            'revenue': int(r['revenue']),
+                            'trading_days': int(r['trading_days']) if not pd.isna(r['trading_days']) else None,
+                            'avg_per_trading_day': float(r['avg_per_trading_day']) if not pd.isna(r['avg_per_trading_day']) else None
+                        })
+
+                    combined['datasets'].setdefault('finmind_revenue', {})['derived'] = {'monthly_aggregates': monthly}
+        except Exception:
+            pass
+
+        # Persist combined files
+        try:
+            files = write_combined_files(company, stock_id, start_date, end_date, combined)
+        except Exception as e:
+            return jsonify({'error': 'failed to write combined files', 'details': str(e), 'results': results}), 500
+
+        return jsonify({'saved': True, 'files': [files['json'], files['csv']], 'results': results})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 import time
 import numpy as np
+import tempfile
+import shutil
 from matplotlib.patches import Rectangle
 from matplotlib.dates import DateFormatter, WeekdayLocator, DayLocator, MONDAY
 import plotly.graph_objects as go
@@ -870,3 +872,140 @@ def save_data_to_datasets(stock_id, data, api_name, start_date=None, end_date=No
         except Exception:
             # If CSV conversion fails, just continue without CSV
             pass
+
+
+def write_combined_files(company: str, stock_id: str, start_date: str, end_date: str, combined_obj: dict, target_root: str = None) -> dict:
+    """Write a combined JSON + flattened CSV for multiple datasets.
+
+    Returns a dict with keys 'json' and 'csv' pointing to the saved file paths.
+    """
+    if target_root is None:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        target_root = os.path.join(project_root, 'engine', 'datasets_ml')
+
+    # sanitize company for filesystem (basic)
+    company_safe = company.replace('/', '-').strip() if company else stock_id
+    folder = os.path.join(target_root, f"{company_safe}-{stock_id}")
+    os.makedirs(folder, exist_ok=True)
+
+    timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+    base = f"combined_{start_date}_{end_date}_{timestamp}"
+
+    # Combined JSON
+    json_final = os.path.join(folder, f"{base}.json")
+    fd, tmp_json = tempfile.mkstemp(dir=folder, prefix='.tmp_combined_', suffix='.json')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(combined_obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_json, json_final)
+    except Exception:
+        # fallback non-atomic
+        with open(json_final, 'w', encoding='utf-8') as f:
+            json.dump(combined_obj, f, ensure_ascii=False, indent=2)
+
+    # Build flattened CSV
+    header = [
+        'company','stock_id','start_date','end_date','created_at','dataset','record_index','date','year_month',
+        'revenue','revenue_year','revenue_month','open','high','low','close','volume',
+        'investor_type','buy','sell','net','margin_balance','short_balance','trading_days','avg_per_trading_day','payload','source'
+    ]
+
+    rows = []
+    datasets = combined_obj.get('datasets', {})
+    created_at = combined_obj.get('meta', {}).get('created_at')
+
+    for dataset_name, ds in datasets.items():
+        records = ds.get('records') or []
+        source = ds.get('source', '')
+        derived = ds.get('derived', {})
+        for idx, rec in enumerate(records):
+            row = {k: None for k in header}
+            row['company'] = company
+            row['stock_id'] = stock_id
+            row['start_date'] = start_date
+            row['end_date'] = end_date
+            row['created_at'] = created_at
+            row['dataset'] = dataset_name
+            row['record_index'] = idx
+            # date/year_month
+            if 'revenue_year' in rec and 'revenue_month' in rec:
+                row['year_month'] = f"{int(rec.get('revenue_year'))}-{int(rec.get('revenue_month')):02d}"
+            elif 'date' in rec:
+                try:
+                    d = pd.to_datetime(rec.get('date'))
+                    row['date'] = d.strftime('%Y-%m-%d')
+                    row['year_month'] = d.strftime('%Y-%m')
+                except Exception:
+                    row['date'] = rec.get('date')
+            # revenue fields
+            if 'revenue' in rec:
+                row['revenue'] = rec.get('revenue')
+            if 'revenue_year' in rec:
+                row['revenue_year'] = rec.get('revenue_year')
+            if 'revenue_month' in rec:
+                row['revenue_month'] = rec.get('revenue_month')
+            # price fields
+            for col in ['open','high','low','close','volume']:
+                if col in rec:
+                    row[col] = rec.get(col)
+            # institutional
+            row['investor_type'] = rec.get('investor_type') or rec.get('name')
+            for col in ['buy','sell','net']:
+                if col in rec:
+                    row[col] = rec.get(col)
+            # margin
+            if 'margin_balance' in rec:
+                row['margin_balance'] = rec.get('margin_balance')
+            if 'short_balance' in rec:
+                row['short_balance'] = rec.get('short_balance')
+            # derived values per dataset (e.g., avg_per_trading_day in derived->monthly_aggregates)
+            # attach if present in record fields
+            if 'trading_days' in rec:
+                row['trading_days'] = rec.get('trading_days')
+            if 'avg_per_trading_day' in rec:
+                row['avg_per_trading_day'] = rec.get('avg_per_trading_day')
+
+            # payload: store original record as JSON string for completeness
+            try:
+                row['payload'] = json.dumps(rec, ensure_ascii=False)
+            except Exception:
+                row['payload'] = str(rec)
+
+            row['source'] = source
+            rows.append(row)
+
+    # Also include derived monthly aggregates if present (append as special rows with dataset 'derived_{dataset}')
+    for dataset_name, ds in datasets.items():
+        derived = ds.get('derived') or {}
+        monthly = derived.get('monthly_aggregates') or []
+        for idx, m in enumerate(monthly):
+            row = {k: None for k in header}
+            row['company'] = company
+            row['stock_id'] = stock_id
+            row['start_date'] = start_date
+            row['end_date'] = end_date
+            row['created_at'] = created_at
+            row['dataset'] = f"derived_{dataset_name}"
+            row['record_index'] = idx
+            row['year_month'] = m.get('year_month')
+            row['revenue'] = m.get('revenue')
+            row['trading_days'] = m.get('trading_days')
+            row['avg_per_trading_day'] = m.get('avg_per_trading_day')
+            row['payload'] = json.dumps(m, ensure_ascii=False)
+            row['source'] = 'derived'
+            rows.append(row)
+
+    # Save CSV atomically
+    csv_final = os.path.join(folder, f"{base}.csv")
+    try:
+        df = pd.DataFrame(rows, columns=header)
+        fd, tmp_csv = tempfile.mkstemp(dir=folder, prefix='.tmp_combined_', suffix='.csv')
+        with os.fdopen(fd, 'w', encoding='utf-8-sig') as f:
+            df.to_csv(f, index=False)
+        os.replace(tmp_csv, csv_final)
+    except Exception:
+        # fallback
+        df = pd.DataFrame(rows)
+        df.to_csv(csv_final, index=False, encoding='utf-8-sig')
+
+    return {'json': json_final, 'csv': csv_final}
