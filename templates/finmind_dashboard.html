@@ -12,6 +12,10 @@
         <div style="text-align: center; margin-bottom: 20px;">
             <a href="/" style="text-decoration: none; color: #3498db;">← 回到首頁</a>
         </div>
+
+        <div class="user-info-panel" style="margin-bottom: 20px; padding: 10px; background-color: #f0f0f0; border-radius: 8px;">
+            <strong>FinMind 使用統計:</strong> <span id="usage">載入中...</span>
+        </div>
         
         <form method="POST" class="controls">
             <div style="display: flex; gap: 15px; align-items: center;">
@@ -38,5 +42,25 @@
         <p style="text-align:center; color:#666; font-size:0.9em; margin-top:8px;">平均月營收/交易日 = 月營收 ÷ 該月份的交易日數（僅計算有交易日的月份）</p>
         {% endif %}
     </div>
+
+    <script>
+        async function loadUserInfo() {
+            try {
+                const resp = await fetch('/api/finmind/user_info');
+                const data = await resp.json();
+                if (data.error) {
+                    document.getElementById('usage').textContent = '無法載入統計資料';
+                } else {
+                    const userCount = data.user_count || data.api_count || data.count || 0;
+                    const limit = data.api_request_limit || data.limit || data.api_limit || 600;
+                    document.getElementById('usage').textContent = `已使用: ${userCount} / 上限: ${limit}`;
+                }
+            } catch (e) {
+                document.getElementById('usage').textContent = '載入失敗';
+            }
+        }
+        loadUserInfo();
+        setInterval(loadUserInfo, 30000);
+    </script>
 </body>
 </html>

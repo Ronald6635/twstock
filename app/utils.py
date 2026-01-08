@@ -12,6 +12,7 @@ import numpy as np
 from matplotlib.patches import Rectangle
 from matplotlib.dates import DateFormatter, WeekdayLocator, DayLocator, MONDAY
 import plotly.graph_objects as go
+import re
 
 def generate_stock_chart(dates, prices, stock_id):
     """Generate a base64 encoded PNG chart for stock prices."""
@@ -548,6 +549,47 @@ def safe_int(value):
         return None
 
 
+def _parse_filename_date_range(filename):
+    """Parse leading date range from filenames like 'YYYY-MM-DD_YYYY-MM-DD_...'
+    or single-date 'YYYY-MM-DD_...'. Returns tuple(date,date) or None."""
+    bn = os.path.basename(filename)
+    base = os.path.splitext(bn)[0]
+    parts = base.split('_')
+    # collect first two date-like tokens
+    date_tokens = []
+    for p in parts[:2]:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", p):
+            date_tokens.append(p)
+    if len(date_tokens) >= 2:
+        try:
+            s = datetime.strptime(date_tokens[0], '%Y-%m-%d').date()
+            e = datetime.strptime(date_tokens[1], '%Y-%m-%d').date()
+            return (s, e)
+        except Exception:
+            return None
+    if len(date_tokens) == 1:
+        try:
+            d = datetime.strptime(date_tokens[0], '%Y-%m-%d').date()
+            return (d, d)
+        except Exception:
+            return None
+    return None
+
+
+def _select_best_cover(candidates):
+    """Select best covering file from list of tuples (fp, f_start, f_end, mtime).
+    Preference: smallest span (f_end - f_start); tie-breaker: newest mtime."""
+    if not candidates:
+        return None
+    # compute (span_days, -mtime, fp)
+    scored = []
+    for fp, f_start, f_end, mtime in candidates:
+        span = (f_end - f_start).days
+        scored.append((span, -mtime, fp, f_start, f_end))
+    scored.sort()
+    return scored[0][2], scored[0][3], scored[0][4]
+
+
 def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, max_age_days=None):
     """Load cached JSON data from datasets folder.
 
@@ -570,7 +612,7 @@ def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, 
     if not os.path.isdir(folder):
         return None
 
-    # If exact start/end provided, look for the exact filename
+    # If exact start/end provided, try exact filename first; if missing, search for a covering file
     if start_date and end_date:
         target = os.path.join(folder, f"{start_date}_{end_date}_{api_name}.json")
         if os.path.exists(target):
@@ -586,7 +628,75 @@ def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, 
             except Exception:
                 # Corrupt file -> ignore
                 return None
-        return None
+
+        # Exact file not found; look for a file whose filename range fully covers requested range
+        try:
+            req_start = datetime.strptime(start_date, '%Y-%m-%d').date()
+            req_end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        except Exception:
+            return None
+
+        candidates = []
+        for fn in os.listdir(folder):
+            if not fn.endswith(f"_{api_name}.json"):
+                continue
+            parsed = _parse_filename_date_range(fn)
+            if not parsed:
+                continue
+            f_start, f_end = parsed
+            if f_start <= req_start and f_end >= req_end:
+                fp = os.path.join(folder, fn)
+                try:
+                    mtime = os.path.getmtime(fp)
+                except Exception:
+                    mtime = 0
+                candidates.append((fp, f_start, f_end, mtime))
+
+        if not candidates:
+            return None
+
+        chosen = _select_best_cover(candidates)
+        if not chosen:
+            return None
+        chosen_fp, f_start, f_end = chosen
+
+        # TTL check
+        if max_age_days is not None:
+            mtime = os.path.getmtime(chosen_fp)
+            age_days = (time.time() - mtime) / 86400.0
+            if age_days > max_age_days:
+                return None
+
+        # Load and filter
+        try:
+            with open(chosen_fp, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        except Exception:
+            return None
+
+        # Normalize to list of records
+        if isinstance(raw, dict) and isinstance(raw.get('data'), list):
+            records = raw['data']
+        elif isinstance(raw, list):
+            records = raw
+        else:
+            return None
+
+        out = []
+        for item in records:
+            dt = item.get('date')
+            if not dt:
+                continue
+            try:
+                dtd = pd.to_datetime(dt, errors='coerce')
+                if pd.isna(dtd):
+                    continue
+                ddate = dtd.date()
+            except Exception:
+                continue
+            if req_start <= ddate <= req_end:
+                out.append(item)
+        return out
 
     # Otherwise find the newest file matching *_{api_name}.json
     candidates = []
