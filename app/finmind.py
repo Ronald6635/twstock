@@ -16,13 +16,13 @@ Architecture notes:
 - Data is cached locally for performance
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, render_template
 import os
 import requests
 from datetime import datetime, timedelta
 from FinMind.data import DataLoader
 import pandas as pd
-from .utils import save_data_to_datasets, generate_stock_chart, generate_kline_chart, load_data_from_datasets
+from .utils import save_data_to_datasets, generate_stock_chart, generate_kline_chart, load_data_from_datasets, generate_plotly_kline_chart
 from typing import Dict, List, Any, Optional
 
 bp = Blueprint('finmind', __name__)
@@ -1655,3 +1655,60 @@ def get_user_info():
         return jsonify({'error': f'HTTP error: {str(he)}'}), 502
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@bp.route('/finmind_dashboard', methods=['GET', 'POST'])
+def finmind_dashboard() -> str:
+    """
+    Render the FinMind dashboard with stock data and charts.
+
+    Handles POST requests to fetch and display stock data, institutional data, and margin data.
+    Generates a Plotly K-line chart for visualization.
+
+    Returns:
+        str: Rendered HTML template for the dashboard.
+    """
+    if request.method == 'POST':
+        stock_id: str = request.form.get('stock_id')
+        start_date: str = request.form.get('start_date')
+        end_date: str = request.form.get('end_date')
+        
+        # Fetch price data
+        price_data = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
+        if price_data is None:
+            api_key = os.getenv('FINMIND_API_KEY')
+            if api_key:
+                api = DataLoader()
+                api.login_by_token(api_token=api_key)
+                df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                # Rename columns to match chart expectations
+                df.rename(columns={'max': 'high', 'min': 'low', 'Trading_Volume': 'volume'}, inplace=True)
+                price_data = df.to_dict(orient='records')
+                save_data_to_datasets(stock_id, price_data, 'finmind_taiwan_stock_price', start_date, end_date)
+        else:
+            # If loaded from cache, ensure columns are renamed
+            df = pd.DataFrame(price_data)
+            df.rename(columns={'max': 'high', 'min': 'low', 'Trading_Volume': 'volume'}, inplace=True)
+            price_data = df.to_dict(orient='records')
+        
+        # Fetch institutional data
+        institutional_data = load_data_from_datasets(stock_id, 'finmind_institutional', start_date, end_date)
+        if institutional_data is None:
+            if api_key:
+                df = api.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                institutional_data = df.to_dict(orient='records')
+                save_data_to_datasets(stock_id, institutional_data, 'finmind_institutional', start_date, end_date)
+        
+        # Fetch margin data
+        margin_data = load_data_from_datasets(stock_id, 'finmind_margin', start_date, end_date)
+        if margin_data is None:
+            if api_key:
+                df = api.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=end_date)
+                margin_data = df.to_dict(orient='records')
+                save_data_to_datasets(stock_id, margin_data, 'finmind_margin', start_date, end_date)
+        
+        # Generate chart
+        chart_html = generate_plotly_kline_chart(price_data, institutional_data, margin_data, stock_id)
+        
+        return render_template('finmind_dashboard.html', chart_html=chart_html)
+    
+    return render_template('finmind_dashboard.html')

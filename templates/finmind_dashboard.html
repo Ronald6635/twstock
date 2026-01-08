@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinMind 股票儀表板</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container" style="max-width: 1400px;">
+        <h1>📊 FinMind 股票分析儀表板</h1>
+        <div style="text-align: center; margin-bottom: 20px;">
+            <a href="/" style="text-decoration: none; color: #3498db;">← 回到首頁</a>
+        </div>
+        
+        <form method="POST" class="controls">
+            <div style="display: flex; gap: 15px; align-items: center;">
+                <div>
+                    <label for="stock_id">股票代碼：</label>
+                    <input type="text" id="stock_id" name="stock_id" value="2379" required style="width: 80px;">
+                </div>
+                <div>
+                    <label for="start_date">開始日期：</label>
+                    <input type="date" id="start_date" name="start_date" value="2025-01-01" required>
+                </div>
+                <div>
+                    <label for="end_date">結束日期：</label>
+                    <input type="date" id="end_date" name="end_date" value="2026-01-07" required>
+                </div>
+                <button type="submit" style="padding: 10px 25px;">即時產生分析圖表</button>
+            </div>
+        </form>
+        
+        {% if chart_html %}
+        <div class="chart-container" style="margin-top: 30px; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
+            {{ chart_html|safe }}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

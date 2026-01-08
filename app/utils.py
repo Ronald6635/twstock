@@ -11,6 +11,7 @@ import time
 import numpy as np
 from matplotlib.patches import Rectangle
 from matplotlib.dates import DateFormatter, WeekdayLocator, DayLocator, MONDAY
+import plotly.graph_objects as go
 
 def generate_stock_chart(dates, prices, stock_id):
     """Generate a base64 encoded PNG chart for stock prices."""
@@ -139,6 +140,299 @@ def generate_kline_chart(stock_data, stock_id, title="K線圖"):
     plt.close()
 
     return img_base64
+
+def generate_plotly_kline_chart(price_data, institutional_data, margin_data, stock_id):
+    """
+    Generate an interactive plotly K-line chart with institutional and margin overlays.
+
+    Args:
+        price_data (list): List of dicts with 'date', 'open', 'high', 'low', 'close', 'volume'
+        institutional_data (list): List of dicts with 'date', 'buy', 'sell' (institutional)
+        margin_data (list): List of dicts with 'date', 'margin_purchase', 'margin_sale', 'short_sale', 'short_covering'
+        stock_id (str): Stock identifier
+
+    Returns:
+        str: HTML div containing the plotly chart
+    """
+    if not price_data:
+        return "<p>No price data available</p>"
+
+    # Convert to DataFrames
+    df_price = pd.DataFrame(price_data)
+    df_price['date'] = pd.to_datetime(df_price['date'])
+    df_price = df_price.sort_values('date')
+
+    # Get stock name if possible
+    stock_name = stock_id
+    try:
+        if stock_id in twstock.codes:
+            stock_name = f"{twstock.codes[stock_id].name} ({stock_id})"
+    except:
+        pass
+
+    # Calculate moving averages
+    for ma in [5, 10, 20, 60]:
+        df_price[f'MA{ma}'] = df_price['close'].rolling(window=ma).mean()
+
+    # Subplot structure: 1. K-line+MA, 2. Volume, 3. 外資, 4. 投信, 5. 融資, 6. 融券
+    from plotly.subplots import make_subplots
+    fig = make_subplots(
+        rows=6, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.4, 0.12, 0.12, 0.12, 0.12, 0.12],
+        subplot_titles=(
+            f'{stock_name} K線圖', '成交量 (Volume)', '外資買賣超 (Foreign)', 
+            '投信買賣超 (Trust)', '融資餘額增減 (Margin)', '融券餘額增減 (Short)'
+        )
+    )
+
+    # K-line
+    fig.add_trace(go.Candlestick(
+        x=df_price['date'],
+        open=df_price['open'],
+        high=df_price['high'],
+        low=df_price['low'],
+        close=df_price['close'],
+        name='K-Line',
+        increasing=dict(line=dict(color='#FF3232'), fillcolor='rgba(255,50,50,0.15)'),
+        decreasing=dict(line=dict(color='#00AB5E'), fillcolor='rgba(0,171,94,0.12)'),
+        showlegend=True
+    ), row=1, col=1)
+
+    # Moving averages
+    colors = ['#FF9800', '#2196F3', '#9C27B0', '#795548'] # Better contrast colors
+    for ma, color in zip([5, 10, 20, 60], colors):
+        fig.add_trace(go.Scatter(
+            x=df_price['date'],
+            y=df_price[f'MA{ma}'],
+            mode='lines',
+            name=f'MA{ma}',
+            line=dict(width=1.5, color=color),
+            showlegend=True
+        ), row=1, col=1)
+
+    # Volume
+    if 'volume' in df_price.columns:
+        colors = ['#FF3232' if c >= o else '#00AB5E' for c, o in zip(df_price['close'], df_price['open'])]
+        fig.add_trace(go.Bar(
+            x=df_price['date'],
+            y=df_price['volume'],
+            marker_color=colors,
+            name='成交量',
+            showlegend=False
+        ), row=2, col=1)
+
+    # Process institutional data (外資/投信)
+    if institutional_data:
+        df_inst_raw = pd.DataFrame(institutional_data)
+        df_inst_raw['date'] = pd.to_datetime(df_inst_raw['date'])
+
+        # Defensive column detection: FinMind sometimes uses 'name' for investor type
+        inst_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and (c.lower() == 'institutional_investor' or 'institution' in c.lower() or 'investor' in c.lower() or c.lower() == 'name')), None)
+        buy_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and 'buy' == c.lower()), None)
+        sell_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and 'sell' == c.lower()), None)
+
+        # Looser matches if exact names not found
+        if inst_col is None:
+            inst_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and ('name' in c.lower() or 'type' in c.lower() or 'invest' in c.lower())), None)
+        if buy_col is None:
+            buy_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and 'buy' in c.lower()), None)
+        if sell_col is None:
+            sell_col = next((c for c in df_inst_raw.columns if isinstance(c, str) and 'sell' in c.lower()), None)
+
+        if inst_col is None or buy_col is None or sell_col is None:
+            # Cannot reliably parse institutional data; create an empty aligned frame to keep plotting stable
+            df_inst = pd.merge(df_price[['date']], pd.DataFrame({'date': df_price['date']}), on='date', how='left').fillna(0)
+        else:
+            # Normalize column names for pivot
+            df_inst_raw = df_inst_raw.rename(columns={inst_col: 'Institutional_Investor', buy_col: 'buy', sell_col: 'sell'})
+
+            try:
+                # Aggregate institutional data: pivot from long to wide (summing buy/sell per investor per date)
+                df_inst_pivot = df_inst_raw.pivot_table(
+                    index='date',
+                    columns='Institutional_Investor',
+                    values=['buy', 'sell'],
+                    aggfunc='sum'
+                ).fillna(0)
+
+                # Flatten multi-index columns
+                df_inst_pivot.columns = [f"{col[1]}_{col[0]}" for col in df_inst_pivot.columns]
+                df_inst_pivot = df_inst_pivot.reset_index()
+
+                # Merge with df_price to align dates
+                df_inst = pd.merge(df_price[['date']], df_inst_pivot, on='date', how='left').fillna(0)
+            except Exception:
+                df_inst = pd.merge(df_price[['date']], pd.DataFrame({'date': df_price['date']}), on='date', how='left').fillna(0)
+
+        # 外資 (Foreign_Investor)
+        if 'Foreign_Investor_buy' in df_inst.columns and 'Foreign_Investor_sell' in df_inst.columns:
+            df_inst['外資'] = df_inst['Foreign_Investor_buy'] - df_inst['Foreign_Investor_sell']
+            fig.add_trace(go.Bar(
+                x=df_inst['date'],
+                y=df_inst['外資'],
+                marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['外資']],
+                name='外資',
+                showlegend=False
+            ), row=3, col=1)
+        else:
+            # ensure blank series to keep layout consistent (no crash)
+            df_inst['外資'] = 0
+
+        # 投信 (Investment_Trust)
+        if 'Investment_Trust_buy' in df_inst.columns and 'Investment_Trust_sell' in df_inst.columns:
+            df_inst['投信'] = df_inst['Investment_Trust_buy'] - df_inst['Investment_Trust_sell']
+            fig.add_trace(go.Bar(
+                x=df_inst['date'],
+                y=df_inst['投信'],
+                marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['投信']],
+                name='投信',
+                showlegend=False
+            ), row=4, col=1)
+        else:
+            df_inst['投信'] = 0
+            fig.add_trace(go.Bar(
+                x=df_inst['date'],
+                y=df_inst['投信'],
+                marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['投信']],
+                name='投信',
+                showlegend=False
+            ), row=4, col=1)
+
+    # 融資/融券
+    if margin_data:
+        df_margin_raw = pd.DataFrame(margin_data)
+        df_margin_raw['date'] = pd.to_datetime(df_margin_raw['date'])
+        df_margin_raw = df_margin_raw.sort_values('date')
+        
+        # Merge with df_price to align dates
+        df_margin = pd.merge(df_price[['date']], df_margin_raw, on='date', how='left').fillna(0)
+
+        # 融資增減: MarginPurchaseBuy - MarginPurchaseSell - MarginPurchaseCashRepayment
+        if 'MarginPurchaseBuy' in df_margin.columns:
+            # If TodayBalance exists, we can use diff, but often Buy-Sell is more immediate
+            df_margin['融資'] = df_margin['MarginPurchaseBuy'] - df_margin['MarginPurchaseSell'] - df_margin.get('MarginPurchaseCashRepayment', 0)
+            fig.add_trace(go.Bar(
+                x=df_margin['date'],
+                y=df_margin['融資'],
+                marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_margin['融資']],
+                name='融資',
+                showlegend=False
+            ), row=5, col=1)
+        
+        # 融券增減: ShortSaleBuy - ShortSaleSell - ShortSaleCashRepayment
+        if 'ShortSaleBuy' in df_margin.columns:
+            # For ShortSale, positive means more shorting (ShortSaleSell > ShortSaleBuy)
+            df_margin['融券'] = df_margin['ShortSaleSell'] - df_margin['ShortSaleBuy'] - df_margin.get('ShortSaleCashRepayment', 0)
+            fig.add_trace(go.Bar(
+                x=df_margin['date'],
+                y=df_margin['融券'],
+                marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_margin['融券']],
+                name='融券',
+                showlegend=False
+            ), row=6, col=1)
+
+            # Add info icon and tooltip for 融資 and 融券 (zh-TW explanations)
+            try:
+                mid_idx = len(df_price) // 2
+                mid_date = df_price['date'].iat[mid_idx]
+            except Exception:
+                mid_date = df_price['date'].iloc[0] if len(df_price) > 0 else None
+
+            # 融資 tooltip (placed at row=5)
+            if '融資' in df_margin.columns:
+                max_abs_m = max(df_margin['融資'].max(), abs(df_margin['融資'].min()))
+                y_pos_m = df_margin['融資'].max() if df_margin['融資'].max() > 0 else (df_margin['融資'].min() * 0.5 if df_margin['融資'].min() < 0 else 1)
+                m_tooltip = (
+                    "融資：當日融資買進減去賣出，反映投資人借入資金(融資)的變化；" 
+                    "正值表示買超(籌碼增加)，負值表示賣超(籌碼減少)。"
+                )
+                fig.add_trace(go.Scatter(
+                    x=[mid_date], y=[y_pos_m], mode='text', text=['ⓘ'],
+                    textfont=dict(size=14, color='#666'), showlegend=False,
+                    hovertemplate=m_tooltip + '<extra></extra>'
+                ), row=5, col=1)
+
+            # 融券 tooltip (placed at row=6)
+            if '融券' in df_margin.columns:
+                y_pos_s = df_margin['融券'].max() if df_margin['融券'].max() > 0 else (df_margin['融券'].min() * 0.5 if df_margin['融券'].min() < 0 else 1)
+                s_tooltip = (
+                    "融券：當日融券賣出減去買回，反映市場空方(融券)的動向；" 
+                    "正值表示放空增加，負值表示買回減少空單。"
+                )
+                fig.add_trace(go.Scatter(
+                    x=[mid_date], y=[y_pos_s], mode='text', text=['ⓘ'],
+                    textfont=dict(size=14, color='#666'), showlegend=False,
+                    hovertemplate=s_tooltip + '<extra></extra>'
+                ), row=6, col=1)
+
+
+    # UI/UX Enhancements
+    fig.update_layout(
+        height=1400,
+        template='plotly_white',
+        hovermode='x unified',
+        xaxis_rangeslider_visible=False, # Disable kline rangeslider to see all subplots better
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=12)
+        ),
+        margin=dict(l=50, r=50, t=80, b=50),
+        spikedistance=-1, # Crosshair style
+    )
+
+    # Hide weekends for all x-axes
+    fig.update_xaxes(
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]), # hide weekends
+        ],
+        showspikes=True, # Show vertical line on hover
+        spikemode='across',
+        spikethickness=1,
+        spikedash='dash',
+        spikecolor='#999999',
+        gridcolor='#eeeeee'
+    )
+
+    # Format Y-axes
+    fig.update_yaxes(gridcolor='#eeeeee', fixedrange=False)
+    
+    # Custom Y-axis formatting for Volume and chips (e.g., 10k instead of 10000)
+    fig.update_layout(
+        yaxis2_tickformat=".2s", # Volume
+        yaxis3_tickformat=".2s", # 外資
+        yaxis4_tickformat=".2s", # 投信
+        yaxis5_tickformat=".2s", # 融資
+        yaxis6_tickformat=".2s", # 融券
+    )
+
+    # Add range selector to the first subplot only
+    fig.update_layout(
+        xaxis1=dict(
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                    dict(count=1, label="1y", step="year", stepmode="backward"),
+                    dict(step="all")
+                ]),
+                font=dict(size=11),
+                y=1.05
+            ),
+            type="date"
+        )
+    )
+
+    html_div = fig.to_html(full_html=False, include_plotlyjs='cdn', config={'responsive': True})
+    return html_div
+    return html_div
 
 def safe_float(value):
     """Safely convert string to float, returning None if invalid."""
