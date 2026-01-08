@@ -1667,6 +1667,16 @@ def finmind_dashboard() -> str:
     Returns:
         str: Rendered HTML template for the dashboard.
     """
+    # Ensure api_key is available in all branches to avoid UnboundLocalError
+    api_key = os.getenv('FINMIND_API_KEY')
+    api = None
+    if api_key:
+        try:
+            api = DataLoader()
+            api.login_by_token(api_token=api_key)
+        except Exception:
+            api = None
+
     if request.method == 'POST':
         stock_id: str = request.form.get('stock_id')
         start_date: str = request.form.get('start_date')
@@ -1675,10 +1685,7 @@ def finmind_dashboard() -> str:
         # Fetch price data
         price_data = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
         if price_data is None:
-            api_key = os.getenv('FINMIND_API_KEY')
-            if api_key:
-                api = DataLoader()
-                api.login_by_token(api_token=api_key)
+            if api:
                 df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 # Rename columns to match chart expectations
                 df.rename(columns={'max': 'high', 'min': 'low', 'Trading_Volume': 'volume'}, inplace=True)
@@ -1693,7 +1700,7 @@ def finmind_dashboard() -> str:
         # Fetch institutional data
         institutional_data = load_data_from_datasets(stock_id, 'finmind_institutional', start_date, end_date)
         if institutional_data is None:
-            if api_key:
+            if api:
                 df = api.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 institutional_data = df.to_dict(orient='records')
                 save_data_to_datasets(stock_id, institutional_data, 'finmind_institutional', start_date, end_date)
@@ -1701,14 +1708,24 @@ def finmind_dashboard() -> str:
         # Fetch margin data
         margin_data = load_data_from_datasets(stock_id, 'finmind_margin', start_date, end_date)
         if margin_data is None:
-            if api_key:
+            if api:
                 df = api.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 margin_data = df.to_dict(orient='records')
                 save_data_to_datasets(stock_id, margin_data, 'finmind_margin', start_date, end_date)
-        
-        # Generate chart
-        chart_html = generate_plotly_kline_chart(price_data, institutional_data, margin_data, stock_id)
-        
-        return render_template('finmind_dashboard.html', chart_html=chart_html)
+
+        # Fetch monthly revenue data
+        revenue_data = load_data_from_datasets(stock_id, 'finmind_revenue', start_date, end_date)
+        if revenue_data is None:
+            if api:
+                df = api.taiwan_stock_month_revenue(stock_id=stock_id, start_date=start_date)
+                revenue_data = df.to_dict(orient='records')
+                save_data_to_datasets(stock_id, revenue_data, 'finmind_revenue', start_date, end_date)
+
+        # Generate chart (include revenue)
+        chart_html = generate_plotly_kline_chart(price_data, institutional_data, margin_data, revenue_data, stock_id)
+
+        return render_template('finmind_dashboard.html', chart_html=chart_html, stock_id=stock_id, start_date=start_date, end_date=end_date)
     
-    return render_template('finmind_dashboard.html')
+    # Default values for GET
+    default_end = datetime.now().strftime('%Y-%m-%d')
+    return render_template('finmind_dashboard.html', stock_id='2379', start_date='2025-01-01', end_date=default_end)

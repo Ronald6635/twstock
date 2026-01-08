@@ -17,15 +17,15 @@
             <div style="display: flex; gap: 15px; align-items: center;">
                 <div>
                     <label for="stock_id">股票代碼：</label>
-                    <input type="text" id="stock_id" name="stock_id" value="2379" required style="width: 80px;">
+                    <input type="text" id="stock_id" name="stock_id" value="{{ stock_id or '2379' }}" required style="width: 80px;">
                 </div>
                 <div>
                     <label for="start_date">開始日期：</label>
-                    <input type="date" id="start_date" name="start_date" value="2025-01-01" required>
+                    <input type="date" id="start_date" name="start_date" value="{{ start_date or '2025-01-01' }}" required>
                 </div>
                 <div>
                     <label for="end_date">結束日期：</label>
-                    <input type="date" id="end_date" name="end_date" value="2026-01-07" required>
+                    <input type="date" id="end_date" name="end_date" value="{{ end_date or '2026-01-07' }}" required>
                 </div>
                 <button type="submit" style="padding: 10px 25px;">即時產生分析圖表</button>
             </div>
@@ -35,6 +35,7 @@
         <div class="chart-container" style="margin-top: 30px; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
             {{ chart_html|safe }}
         </div>
+        <p style="text-align:center; color:#666; font-size:0.9em; margin-top:8px;">平均月營收/交易日 = 月營收 ÷ 該月份的交易日數（僅計算有交易日的月份）</p>
         {% endif %}
     </div>
 </body>

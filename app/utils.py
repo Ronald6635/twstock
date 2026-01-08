@@ -141,15 +141,16 @@ def generate_kline_chart(stock_data, stock_id, title="K線圖"):
 
     return img_base64
 
-def generate_plotly_kline_chart(price_data, institutional_data, margin_data, stock_id):
+def generate_plotly_kline_chart(price_data, institutional_data, margin_data, revenue_data=None, stock_id=None):
     """
-    Generate an interactive plotly K-line chart with institutional and margin overlays.
+    Generate an interactive plotly K-line chart with institutional, margin, and monthly revenue overlays.
 
     Args:
         price_data (list): List of dicts with 'date', 'open', 'high', 'low', 'close', 'volume'
         institutional_data (list): List of dicts with 'date', 'buy', 'sell' (institutional)
         margin_data (list): List of dicts with 'date', 'margin_purchase', 'margin_sale', 'short_sale', 'short_covering'
-        stock_id (str): Stock identifier
+        revenue_data (list|None): List of dicts with monthly revenue (fields: 'date' or 'revenue_year'/'revenue_month' and 'revenue')
+        stock_id (str|None): Stock identifier
 
     Returns:
         str: HTML div containing the plotly chart
@@ -177,13 +178,13 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
     # Subplot structure: 1. K-line+MA, 2. Volume, 3. 外資, 4. 投信, 5. 融資, 6. 融券
     from plotly.subplots import make_subplots
     fig = make_subplots(
-        rows=6, cols=1,
+        rows=7, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_heights=[0.4, 0.12, 0.12, 0.12, 0.12, 0.12],
+        row_heights=[0.36, 0.12, 0.12, 0.11, 0.11, 0.11, 0.11],
         subplot_titles=(
-            f'{stock_name} K線圖', '成交量 (Volume)', '外資買賣超 (Foreign)', 
-            '投信買賣超 (Trust)', '融資餘額增減 (Margin)', '融券餘額增減 (Short)'
+            f'{stock_name} K線圖', '成交量 (Volume)', '平均月營收/交易日 (Avg Monthly Revenue per Trading Day)',
+            '外資買賣超 (Foreign)', '投信買賣超 (Trust)', '融資餘額增減 (Margin)', '融券餘額增減 (Short)'
         )
     )
 
@@ -222,6 +223,103 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
             name='成交量',
             showlegend=False
         ), row=2, col=1)
+
+    # Average monthly revenue per trading day (插入第3列)
+    if revenue_data:
+        df_rev = pd.DataFrame(revenue_data)
+        # Prefer explicit year/month fields to avoid ambiguities
+        if 'revenue_year' in df_rev.columns and 'revenue_month' in df_rev.columns:
+            df_rev['year_month'] = pd.to_datetime(df_rev['revenue_year'].astype(str) + '-' + df_rev['revenue_month'].astype(str) + '-01').dt.to_period('M')
+        else:
+            # fallback to using 'date' field
+            if 'date' in df_rev.columns:
+                df_rev['date'] = pd.to_datetime(df_rev['date'])
+                df_rev['year_month'] = df_rev['date'].dt.to_period('M')
+            else:
+                df_rev['year_month'] = pd.NaT
+
+        # Count trading days per month from price data
+        df_price['year_month'] = df_price['date'].dt.to_period('M')
+        td = df_price.groupby('year_month').size().reset_index(name='trading_days')
+
+        # Aggregate revenue per month (some APIs may provide multiple rows per month)
+        if 'revenue' in df_rev.columns:
+            df_rev_grouped = df_rev.groupby('year_month', as_index=False).agg({'revenue':'sum'})
+            df_rev_grouped = pd.merge(df_rev_grouped, td, on='year_month', how='left')
+
+            # For months without trading day info (e.g., missing daily price rows), estimate trading days using business days
+            import calendar
+            est_flags = []
+            for i, row in df_rev_grouped.iterrows():
+                td_val = row.get('trading_days')
+                if pd.isna(td_val) or td_val == 0:
+                    # estimate using calendar business days for that month
+                    ym = row['year_month']
+                    if pd.isna(ym):
+                        est_flags.append('')
+                        df_rev_grouped.at[i, 'trading_days'] = None
+                        continue
+                    year = ym.year
+                    month = ym.month
+                    last_day = calendar.monthrange(year, month)[1]
+                    start = pd.Timestamp(year, month, 1)
+                    end = pd.Timestamp(year, month, last_day)
+                    est_td = pd.bdate_range(start, end).size
+                    df_rev_grouped.at[i, 'trading_days'] = est_td
+                    est_flags.append('(估)')
+                else:
+                    est_flags.append('')
+
+            df_rev_grouped['est_flag'] = est_flags
+
+            df_rev_grouped['avg_rev_per_trading_day'] = df_rev_grouped.apply(
+                lambda r: (r['revenue'] / r['trading_days']) if r['trading_days'] and r['trading_days'] > 0 else None,
+                axis=1
+            )
+
+            # Prefer plotting at the **last trading day of that month** so rangebreaks (weekend hiding) don't drop the point.
+            try:
+                last_trade_map = df_price.groupby('year_month')['date'].max()
+                df_rev_grouped['x'] = df_rev_grouped['year_month'].map(last_trade_map)
+                # Fallback to month-end timestamp if we still don't have a trading date
+                missing_x = df_rev_grouped['x'].isna()
+                if missing_x.any():
+                    df_rev_grouped.loc[missing_x, 'x'] = df_rev_grouped.loc[missing_x, 'year_month'].dt.to_timestamp('M')
+                    df_rev_grouped.loc[missing_x, 'est_flag'] = df_rev_grouped.loc[missing_x, 'est_flag'].astype(str) + ' (no-trade)'
+            except Exception:
+                # if grouping fails, fallback to month-end timestamps
+                df_rev_grouped['x'] = df_rev_grouped['year_month'].dt.to_timestamp('M')
+
+            # Compute percent change and colors compared to previous month
+            df_rev_grouped['pct_change'] = df_rev_grouped['avg_rev_per_trading_day'].pct_change() * 100
+            df_rev_grouped['change_label'] = df_rev_grouped['pct_change'].apply(lambda x: (f"{x:+.2f}%") if pd.notna(x) else 'N/A')
+
+            # Color: red if up vs previous, green if down, neutral blue for first/unchanged
+            df_rev_grouped['color'] = '#4B8BF4'
+            increase_mask = df_rev_grouped['avg_rev_per_trading_day'] > df_rev_grouped['avg_rev_per_trading_day'].shift(1)
+            decrease_mask = df_rev_grouped['avg_rev_per_trading_day'] < df_rev_grouped['avg_rev_per_trading_day'].shift(1)
+            df_rev_grouped.loc[increase_mask, 'color'] = '#FF3232'
+            df_rev_grouped.loc[decrease_mask, 'color'] = '#00AB5E'
+
+            # Add bar trace for averaged monthly revenue. Include est_flag and change_label in customdata for tooltip.
+            fig.add_trace(go.Bar(
+                x=df_rev_grouped['x'],
+                y=df_rev_grouped['avg_rev_per_trading_day'],
+                name='平均月營收/交易日',
+                marker_color=df_rev_grouped['color'],
+                customdata=df_rev_grouped[['trading_days', 'revenue', 'est_flag', 'change_label']].values,
+                hovertemplate=(
+                    '年份/月份: %{x|%Y-%m}<br>'
+                    '平均月營收/交易日: %{y:.2s}<br>'
+                    '月營收: %{customdata[1]:.2s}<br>'
+                    '交易日數: %{customdata[0]} %{customdata[2]}<br>'
+                    '較上月: %{customdata[3]}<extra></extra>'
+                ),
+                showlegend=False
+            ), row=3, col=1)
+        else:
+            # no revenue field -> skip plotting
+            pass
 
     # Process institutional data (外資/投信)
     if institutional_data:
@@ -275,7 +373,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                 marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['外資']],
                 name='外資',
                 showlegend=False
-            ), row=3, col=1)
+            ), row=4, col=1)
         else:
             # ensure blank series to keep layout consistent (no crash)
             df_inst['外資'] = 0
@@ -289,7 +387,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                 marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['投信']],
                 name='投信',
                 showlegend=False
-            ), row=4, col=1)
+            ), row=5, col=1)
         else:
             df_inst['投信'] = 0
             fig.add_trace(go.Bar(
@@ -298,7 +396,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                 marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_inst['投信']],
                 name='投信',
                 showlegend=False
-            ), row=4, col=1)
+            ), row=5, col=1)
 
     # 融資/融券
     if margin_data:
@@ -319,7 +417,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                 marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_margin['融資']],
                 name='融資',
                 showlegend=False
-            ), row=5, col=1)
+            ), row=6, col=1)
         
         # 融券增減: ShortSaleBuy - ShortSaleSell - ShortSaleCashRepayment
         if 'ShortSaleBuy' in df_margin.columns:
@@ -331,7 +429,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                 marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_margin['融券']],
                 name='融券',
                 showlegend=False
-            ), row=6, col=1)
+            ), row=7, col=1)
 
             # Add info icon and tooltip for 融資 and 融券 (zh-TW explanations)
             try:
@@ -340,7 +438,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
             except Exception:
                 mid_date = df_price['date'].iloc[0] if len(df_price) > 0 else None
 
-            # 融資 tooltip (placed at row=5)
+            # 融資 tooltip (placed at row=6)
             if '融資' in df_margin.columns:
                 max_abs_m = max(df_margin['融資'].max(), abs(df_margin['融資'].min()))
                 y_pos_m = df_margin['融資'].max() if df_margin['融資'].max() > 0 else (df_margin['融資'].min() * 0.5 if df_margin['融資'].min() < 0 else 1)
@@ -352,9 +450,9 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                     x=[mid_date], y=[y_pos_m], mode='text', text=['ⓘ'],
                     textfont=dict(size=14, color='#666'), showlegend=False,
                     hovertemplate=m_tooltip + '<extra></extra>'
-                ), row=5, col=1)
+                ), row=6, col=1)
 
-            # 融券 tooltip (placed at row=6)
+            # 融券 tooltip (placed at row=7)
             if '融券' in df_margin.columns:
                 y_pos_s = df_margin['融券'].max() if df_margin['融券'].max() > 0 else (df_margin['融券'].min() * 0.5 if df_margin['融券'].min() < 0 else 1)
                 s_tooltip = (
@@ -365,7 +463,7 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
                     x=[mid_date], y=[y_pos_s], mode='text', text=['ⓘ'],
                     textfont=dict(size=14, color='#666'), showlegend=False,
                     hovertemplate=s_tooltip + '<extra></extra>'
-                ), row=6, col=1)
+                ), row=7, col=1)
 
 
     # UI/UX Enhancements
@@ -405,10 +503,11 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
     # Custom Y-axis formatting for Volume and chips (e.g., 10k instead of 10000)
     fig.update_layout(
         yaxis2_tickformat=".2s", # Volume
-        yaxis3_tickformat=".2s", # 外資
-        yaxis4_tickformat=".2s", # 投信
-        yaxis5_tickformat=".2s", # 融資
-        yaxis6_tickformat=".2s", # 融券
+        yaxis3_tickformat=".2s", # 平均月營收/交易日
+        yaxis4_tickformat=".2s", # 外資
+        yaxis5_tickformat=".2s", # 投信
+        yaxis6_tickformat=".2s", # 融資
+        yaxis7_tickformat=".2s", # 融券
     )
 
     # Add range selector to the first subplot only
@@ -430,8 +529,8 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, sto
         )
     )
 
-    html_div = fig.to_html(full_html=False, include_plotlyjs='cdn', config={'responsive': True})
-    return html_div
+    # Add a tiny HTML comment to make it easy to locate the 平均月營收 row in tests/UI
+    html_div = "<!-- avg_month_title: 平均月營收/交易日 -->\n" + fig.to_html(full_html=False, include_plotlyjs='cdn', config={'responsive': True})
     return html_div
 
 def safe_float(value):
