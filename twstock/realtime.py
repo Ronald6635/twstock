@@ -21,17 +21,26 @@ mock = False
 def _format_stock_info(data) -> dict:
     result = {"timestamp": 0.0, "info": {}, "realtime": {}}
 
-    # Timestamp
-    result["timestamp"] = int(data["tlong"]) / 1000
+    # Timestamp (may be missing)
+    tlong = data.get("tlong")
+    if tlong is not None:
+        try:
+            result["timestamp"] = int(tlong) / 1000
+            result["info"]["time"] = datetime.datetime.fromtimestamp(result["timestamp"]).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        except Exception:
+            result["timestamp"] = 0.0
+            result["info"]["time"] = ""
+    else:
+        result["timestamp"] = 0.0
+        result["info"]["time"] = ""
 
-    # Information
-    result["info"]["code"] = data["c"]
-    result["info"]["channel"] = data["ch"]
-    result["info"]["name"] = data["n"]
-    result["info"]["fullname"] = data["nf"]
-    result["info"]["time"] = datetime.datetime.fromtimestamp(
-        int(data["tlong"]) / 1000
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    # Information (defensive access)
+    result["info"]["code"] = data.get("c", "")
+    result["info"]["channel"] = data.get("ch", "")
+    result["info"]["name"] = data.get("n", "")
+    result["info"]["fullname"] = data.get("nf", "")
 
     # Process best result
     def _split_best(d):
@@ -94,6 +103,10 @@ def get_raw(stocks) -> dict:
 
 
 def get(stocks, retry=3):
+    # Guard: empty input -> return error
+    if not stocks:
+        return {"success": False, "rtmessage": "Empty Query.", "rtcode": "5001"}
+
     # Prepare data
     data = get_raw(stocks) if not mock else twstock.mock.get(stocks)
 

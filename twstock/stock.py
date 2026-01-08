@@ -48,8 +48,19 @@ class BaseFetcher(object):
         pass
 
     def _convert_date(self, date):
-        """Convert '106/05/01' to '2017/05/01'"""
-        return "/".join([str(int(date.split("/")[0]) + 1911)] + date.split("/")[1:])
+        """Convert '106/05/01' (ROC) to '2017/05/01' (AD).
+        Accept datetime/date or already AD strings as-is."""
+        # datetime/date -> format
+        if isinstance(date, (datetime.date, datetime.datetime)):
+            return date.strftime("%Y/%m/%d")
+        if not isinstance(date, str):
+            return date
+        parts = date.split("/")
+        if len(parts) >= 3 and len(parts[0]) == 3 and parts[0].isdigit():
+            # ROC year
+            return "/".join([str(int(parts[0]) + 1911)] + parts[1:])
+        # assume already AD format
+        return date
 
     def _make_datatuple(self, data):
         pass
@@ -70,7 +81,7 @@ class TWSEFetcher(BaseFetcher):
             r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies(), verify=False)
             try:
                 data = r.json()
-            except JSONDecodeError:
+            except (JSONDecodeError, requests.exceptions.JSONDecodeError):
                 continue
             else:
                 break
@@ -97,7 +108,9 @@ class TWSEFetcher(BaseFetcher):
             0.0 if data[7].replace(",", "") == "X0.00" else data[7].replace(",", "")
         )
         data[8] = int(data[8].replace(",", ""))
-        return DATATUPLE(*data)
+        return DATATUPLE(
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], None
+        )
 
     def purify(self, original_data):
         return [self._make_datatuple(d) for d in original_data["data"]]
@@ -117,7 +130,7 @@ class TPEXFetcher(BaseFetcher):
             r = requests.get(self.REPORT_URL, params=params, proxies=get_proxies(), verify=False)
             try:
                 data = r.json()
-            except JSONDecodeError:
+            except (JSONDecodeError, requests.exceptions.JSONDecodeError):
                 continue
             else:
                 break
@@ -135,9 +148,13 @@ class TPEXFetcher(BaseFetcher):
         return "/".join([str(int(date.split("/")[0]) + 1911)] + date.split("/")[1:])
 
     def _make_datatuple(self, data):
-        data[0] = datetime.datetime.strptime(
-            self._convert_date(data[0].replace("＊", "")), "%Y/%m/%d"
-        )
+        # Defensive: data[0] may be datetime already or a string with special char
+        d0 = data[0]
+        if isinstance(d0, (datetime.date, datetime.datetime)):
+            s0 = d0.strftime("%Y/%m/%d")
+        else:
+            s0 = str(d0).replace("＊", "")
+        data[0] = datetime.datetime.strptime(self._convert_date(s0), "%Y/%m/%d")
         data[1] = int(data[1].replace(",", "")) * 1000
         data[2] = int(data[2].replace(",", "")) * 1000
         data[3] = None if data[3] == "--" else float(data[3].replace(",", ""))
@@ -146,7 +163,9 @@ class TPEXFetcher(BaseFetcher):
         data[6] = None if data[6] == "--" else float(data[6].replace(",", ""))
         data[7] = float(data[7].replace(",", ""))
         data[8] = int(data[8].replace(",", ""))
-        return DATATUPLE(*data)
+        return DATATUPLE(
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], None
+        )
 
     def purify(self, original_data):
         return [self._make_datatuple(d) for d in original_data["aaData"]]
