@@ -100,6 +100,23 @@ def preprocess_data(input_file, output_json, output_csv):
         margin_transformed[date] = rec
         prev_date = date
     
+    # Handle financial statements (EPS and Gross Profit)
+    financial_transformed = {}
+    if 'finmind_financial_statement' in datasets:
+        fin_ds = datasets['finmind_financial_statement']
+        # Prefer daily_financial_series from derived or records if already daily
+        fin_records = fin_ds.get('derived', {}).get('daily_financial_series')
+        if not fin_records:
+            fin_records = fin_ds.get('records', [])
+        
+        for rec in fin_records:
+            date = rec.get('date')
+            if date:
+                financial_transformed[date] = {
+                    'eps': rec.get('eps'),
+                    'gross_profit': rec.get('gross_profit')
+                }
+    
     # Merge all into final data
     final_data = []
     for date in trading_dates:
@@ -122,6 +139,8 @@ def preprocess_data(input_file, output_json, output_csv):
             entry.update(revenue_transformed[date])
         if date in margin_transformed:
             entry.update(margin_transformed[date])
+        if date in financial_transformed:
+            entry.update(financial_transformed[date])
         final_data.append(entry)
     
     # Output to JSON
@@ -133,7 +152,8 @@ def preprocess_data(input_file, output_json, output_csv):
     df.to_csv(output_csv, index=False)
 
 if __name__ == "__main__":
-    input_file = os.path.join("聯詠-3034", "combined_2025-01-01_2026-01-01_20260108T035618Z.json")
-    output_json = "preprocessed_3034.json"
-    output_csv = "preprocessed_3034.csv"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file = os.path.join(base_dir, "中華化-1727", "combined_2025-01-01_2026-01-09_20260109T044505Z.json")
+    output_json = os.path.join(base_dir, "preprocessed_1727.json")
+    output_csv = os.path.join(base_dir, "preprocessed_1727.csv")
     preprocess_data(input_file, output_json, output_csv)

@@ -17,8 +17,8 @@
             <strong>FinMind 使用統計:</strong> <span id="usage">載入中...</span>
         </div>
         
-        <form method="POST" class="controls">
-            <div style="display: flex; gap: 15px; align-items: center;">
+        <form method="POST" class="controls" id="dashboard-form">
+            <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; justify-content: center;">
                 <div>
                     <label for="stock_id">股票代碼：</label>
                     <input type="text" id="stock_id" name="stock_id" value="{{ stock_id or '2379' }}" required style="width: 80px;">
@@ -32,13 +32,60 @@
                     <input type="date" id="end_date" name="end_date" value="{{ end_date or '2026-01-07' }}" required>
                 </div>
                 <button type="submit" style="padding: 10px 25px;">即時產生分析圖表</button>
+
+                <!-- Financial summary container (Ajax updated) -->
+                <div id="financial-summary-container" style="flex-basis: 100%; width: 100%; margin-top: 15px;">
+                  {% if financial_series or latest_eps or latest_gross %}
+                    <!-- Financial summary panel -->
+                    <div class="financial-panel" style="display:flex; gap:20px; align-items:center; justify-content:center;">
+                        <div style="padding:12px; background:#f9f9ff; border-radius:8px; text-align:center; min-width:160px; border:1px solid #e0e0ff;">
+                            <div style="font-size:0.9em; color:#666;">最新 EPS</div>
+                            <div id="summary-eps" style="font-size:1.4em; font-weight:600; margin-top:6px;">{{ '%.2f'|format(latest_eps) if latest_eps is not none else '—' }}</div>
+                        </div>
+                        <div style="padding:12px; background:#fff9f0; border-radius:8px; text-align:center; min-width:200px; border:1px solid #ffe0b0;">
+                            <div style="font-size:0.9em; color:#666;">最新 毛利 (Gross Profit)</div>
+                            <div id="summary-gross" style="font-size:1.2em; font-weight:600; margin-top:6px;">{{ '{:,.0f}'.format(latest_gross) if latest_gross is not none else '—' }}</div>
+                        </div>
+                    </div>
+
+                    <!-- Recent financial statement rows -->
+                    <div id="financial-table-wrapper" style="max-width:800px; margin:15px auto 0; overflow-x: auto;">
+                        <table style="width:100%; border-collapse:collapse; font-size:0.9em; background:#fff;">
+                            <thead>
+                                <tr style="background:#f8f9fa;">
+                                    <th style="padding:8px; text-align:left; border-bottom:2px solid #dee2e6;">日期</th>
+                                    <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">EPS</th>
+                                    <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">毛利 (Gross Profit)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="financial-table-body">
+                                {% for r in financial_series %}
+                                <tr style="border-bottom:1px solid #eee;">
+                                    <td style="padding:8px;">{{ r.date if r.date else '' }}</td>
+                                    <td style="padding:8px; text-align:right;">{{ '%.2f'|format(r.eps) if r.eps is not none else '—' }}</td>
+                                    <td style="padding:8px; text-align:right;">{{ '{:,.0f}'.format(r.gross_profit) if r.gross_profit is not none else '—' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                  {% endif %}
+                </div>
             </div>
         </form>
         
         {% if chart_html %}
         <div class="chart-container" style="margin-top: 30px; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
             {{ chart_html|safe }}
+            
+            <!-- Dedicated row for Seasonal EPS and Gross Profit (backward-filled) -->
+            {% if financial_chart_html %}
+            <div style="border-top: 1px solid #eee;">
+                {{ financial_chart_html|safe }}
+            </div>
+            {% endif %}
         </div>
+
         <div style="text-align:center; margin-top:10px;">
             <label style="margin-right:8px;"><input type="checkbox" id="force_refresh"> 強制重新抓取（force refresh）</label>
             <button id="save_button" type="button" style="padding: 8px 18px;">💾 存檔</button>
@@ -103,6 +150,86 @@
         document.addEventListener('DOMContentLoaded', function(){
             const saveBtn = document.getElementById('save_button');
             if (saveBtn) saveBtn.addEventListener('click', saveDashboard);
+
+            // Handle async financial summary update when stock_id changes
+            const stockInput = document.getElementById('stock_id');
+            const summaryContainer = document.getElementById('financial-summary-container');
+
+            async function updateFinancialSummary() {
+                const stockId = stockInput.value.trim();
+                const startDate = document.getElementById('start_date').value;
+                if (!stockId) return;
+
+                try {
+                    // Update summary panel with "Loading" state
+                    const epsEl = document.getElementById('summary-eps');
+                    const grossEl = document.getElementById('summary-gross');
+                    if (epsEl) epsEl.textContent = '...';
+                    if (grossEl) grossEl.textContent = '...';
+
+                    const resp = await fetch(`/api/finmind/financial_summary/${stockId}?start_date=${startDate}`);
+                    if (!resp.ok) throw new Error('Fetch failed');
+                    const data = await resp.json();
+
+                    // If container was empty (i.e. first load), create the structure
+                    if (!summaryContainer.innerHTML.trim()) {
+                        summaryContainer.innerHTML = `
+                            <div class="financial-panel" style="display:flex; gap:20px; align-items:center; justify-content:center;">
+                                <div style="padding:12px; background:#f9f9ff; border-radius:8px; text-align:center; min-width:160px; border:1px solid #e0e0ff;">
+                                    <div style="font-size:0.9em; color:#666;">最新 EPS</div>
+                                    <div id="summary-eps" style="font-size:1.4em; font-weight:600; margin-top:6px;">—</div>
+                                </div>
+                                <div style="padding:12px; background:#fff9f0; border-radius:8px; text-align:center; min-width:200px; border:1px solid #ffe0b0;">
+                                    <div style="font-size:0.9em; color:#666;">最新 毛利 (Gross Profit)</div>
+                                    <div id="summary-gross" style="font-size:1.2em; font-weight:600; margin-top:6px;">—</div>
+                                </div>
+                            </div>
+                            <div id="financial-table-wrapper" style="max-width:800px; margin:15px auto 0; overflow-x: auto;">
+                                <table style="width:100%; border-collapse:collapse; font-size:0.9em; background:#fff;">
+                                    <thead>
+                                        <tr style="background:#f8f9fa;">
+                                            <th style="padding:8px; text-align:left; border-bottom:2px solid #dee2e6;">日期</th>
+                                            <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">EPS</th>
+                                            <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">毛利 (Gross Profit)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="financial-table-body"></tbody>
+                                </table>
+                            </div>
+                        `;
+                    }
+
+                    // Update values
+                    document.getElementById('summary-eps').textContent = data.latest_eps !== null ? data.latest_eps.toFixed(2) : '—';
+                    document.getElementById('summary-gross').textContent = data.latest_gross !== null ? data.latest_gross.toLocaleString() : '—';
+                    
+                    // Update table rows
+                    const tbody = document.getElementById('financial-table-body');
+                    tbody.innerHTML = (data.financial_series || []).map(r => `
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:8px;">${r.date || ''}</td>
+                            <td style="padding:8px; text-align:right;">${r.eps !== null ? r.eps.toFixed(2) : '—'}</td>
+                            <td style="padding:8px; text-align:right;">${r.gross_profit !== null ? r.gross_profit.toLocaleString() : '—'}</td>
+                        </tr>
+                    `).join('');
+
+                } catch (e) {
+                    console.error('Failed to update financial summary', e);
+                    const epsEl = document.getElementById('summary-eps');
+                    if (epsEl) epsEl.textContent = 'Error';
+                }
+            }
+
+            // Trigger on Blur (when user leaves input) or Enter
+            if (stockInput) {
+                stockInput.addEventListener('blur', updateFinancialSummary);
+                stockInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        updateFinancialSummary();
+                    }
+                });
+            }
         });
     </script>
 </body>

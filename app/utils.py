@@ -536,6 +536,40 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, rev
     html_div = "<!-- avg_month_title: 平均月營收/交易日 -->\n" + fig.to_html(full_html=False, include_plotlyjs='cdn', config={'responsive': True})
     return html_div
 
+
+def generate_financial_chart(financial_daily, stock_id=None):
+    """Generate a small Plotly chart showing seasonal EPS and GrossProfit (scaled).
+
+    Returns an HTML snippet (div) or empty string if data is missing.
+    """
+    if not financial_daily:
+        return ''
+    import plotly.graph_objects as go
+    import pandas as pd
+
+    df = pd.DataFrame(financial_daily)
+    if df.empty:
+        return ''
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Convert gross to a smaller unit (e.g., 100M) for plotting readability
+    df['gross_100m'] = df['gross_profit'].apply(lambda x: (x / 1e8) if pd.notna(x) else None)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['date'], y=df['eps'], name='EPS (當季)', mode='lines+markers', marker=dict(size=4), line=dict(width=1.8, color='#1f77b4')))
+    fig.add_trace(go.Bar(x=df['date'], y=df['gross_100m'], name='毛利 (100M)', marker_color='#ff7f0e', opacity=0.5, yaxis='y2'))
+
+    fig.update_layout(
+        title=f"{stock_id or ''}：EPS 與 毛利",
+        xaxis=dict(type='date', showspikes=True),
+        yaxis=dict(title='EPS', side='left', showgrid=True),
+        yaxis2=dict(title='Gross Profit (100M)', overlaying='y', side='right', tickformat='.2s'),
+        legend=dict(orientation='h', y=1.02, x=0),
+        margin=dict(t=48, b=40)
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs='cdn', config={'responsive': True})
+
 def safe_float(value):
     """Safely convert string to float, returning None if invalid."""
     try:
@@ -906,6 +940,7 @@ def write_combined_files(company: str, stock_id: str, start_date: str, end_date:
     # Build flattened CSV
     header = [
         'company','stock_id','start_date','end_date','created_at','dataset','record_index','date','year_month',
+        'eps','gross_profit',
         'revenue','revenue_year','revenue_month','open','high','low','close','volume',
         'investor_type','buy','sell','net','margin_balance','short_balance','trading_days','avg_per_trading_day','payload','source'
     ]
@@ -944,6 +979,11 @@ def write_combined_files(company: str, stock_id: str, start_date: str, end_date:
                 row['revenue_year'] = rec.get('revenue_year')
             if 'revenue_month' in rec:
                 row['revenue_month'] = rec.get('revenue_month')
+            # financial fields (e.g., derived daily series use 'eps' and 'gross_profit')
+            if 'eps' in rec:
+                row['eps'] = rec.get('eps')
+            if 'gross_profit' in rec:
+                row['gross_profit'] = rec.get('gross_profit')
             # price fields
             for col in ['open','high','low','close','volume']:
                 if col in rec:
@@ -992,6 +1032,34 @@ def write_combined_files(company: str, stock_id: str, start_date: str, end_date:
             row['trading_days'] = m.get('trading_days')
             row['avg_per_trading_day'] = m.get('avg_per_trading_day')
             row['payload'] = json.dumps(m, ensure_ascii=False)
+            row['source'] = 'derived'
+            rows.append(row)
+
+    # Also include derived daily financial series if present (e.g., forward-filled EPS and GrossProfit aligned to trading days)
+    for dataset_name, ds in datasets.items():
+        derived = ds.get('derived') or {}
+        daily = derived.get('daily_financial_series') or []
+        for idx, d in enumerate(daily):
+            row = {k: None for k in header}
+            row['company'] = company
+            row['stock_id'] = stock_id
+            row['start_date'] = start_date
+            row['end_date'] = end_date
+            row['created_at'] = created_at
+            row['dataset'] = f"derived_{dataset_name}"
+            row['record_index'] = idx
+            # date/year_month
+            try:
+                d_date = pd.to_datetime(d.get('date'))
+                row['date'] = d_date.strftime('%Y-%m-%d')
+                row['year_month'] = d_date.strftime('%Y-%m')
+            except Exception:
+                row['date'] = d.get('date')
+            if 'eps' in d:
+                row['eps'] = d.get('eps')
+            if 'gross_profit' in d:
+                row['gross_profit'] = d.get('gross_profit')
+            row['payload'] = json.dumps(d, ensure_ascii=False)
             row['source'] = 'derived'
             rows.append(row)
 

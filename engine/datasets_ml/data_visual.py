@@ -182,12 +182,12 @@ def prepare_data_for_chart(preprocessed_data: dict) -> tuple[list[dict], list[di
 def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
     """Build and return the auxiliary Plotly figure for the given dataframes."""
     aux_fig = make_subplots(
-        rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        row_heights=[0.36, 0.12, 0.12, 0.12, 0.08, 0.08, 0.06, 0.06],
+        rows=10, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+        row_heights=[0.28, 0.10, 0.10, 0.10, 0.08, 0.08, 0.06, 0.06, 0.07, 0.07],
         subplot_titles=(
             'K線圖', '成交量 (Volume)', '日平均/每交易日營收 (daily_revenue)', '外資買賣超 (foreign_investor_net)',
             '投信買賣超 (investment_trust_net)', '自營商買賣超 (dealer_net)', '融資餘額增減 (MarginPurchaseBalanceChange)',
-            '融券餘額增減 (ShortSaleBalanceChange)'
+            '融券餘額增減 (ShortSaleBalanceChange)', '每股盈餘 (EPS)', '營業毛利 (Gross Profit 100M)'
         )
     )
 
@@ -305,6 +305,34 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             hovertemplate='ShortSaleBalanceChange: %{y:,.0f}<extra></extra>'
         ), row=8, col=1)
 
+    # Row 9: EPS
+    if not df_rec.empty and 'eps' in df_rec.columns:
+        eps_vals = pd.to_numeric(df_rec['eps'], errors='coerce')
+        aux_fig.add_trace(go.Scatter(
+            x=df_rec['date'],
+            y=eps_vals,
+            mode='lines+markers',
+            marker=dict(size=4),
+            name='EPS',
+            line=dict(width=2, color='#1f77b4'),
+            hovertemplate='EPS: %{y:.2f}<extra></extra>'
+        ), row=9, col=1)
+
+    # Row 10: Gross Profit
+    if not df_rec.empty and 'gross_profit' in df_rec.columns:
+        gp_vals = pd.to_numeric(df_rec['gross_profit'], errors='coerce').fillna(0)
+        # Scale to 100M for readability
+        gp_scaled = gp_vals / 1e8
+        aux_fig.add_trace(go.Bar(
+            x=df_rec['date'],
+            y=gp_scaled,
+            marker_color='#ff7f0e',
+            opacity=0.7,
+            name='Gross Profit (100M)',
+            hovertemplate='Gross Profit: %{y:.2f} 100M<extra></extra>'
+        ), row=10, col=1)
+        aux_fig.update_yaxes(title_text='100M', row=10, col=1)
+
     # Remove gaps for non-trading days by computing calendar dates missing from the records
     if not df_rec.empty and 'date' in df_rec.columns:
         try:
@@ -319,7 +347,7 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             # Apply rangebreaks to all subplot x-axes (Plotly accepts a list of dicts)
             if missing:
                 rb = [dict(values=missing)]
-                for row in range(1, 9):
+                for row in range(1, 11):
                     try:
                         aux_fig.update_xaxes(rangebreaks=rb, row=row, col=1)
                     except Exception:
@@ -329,13 +357,13 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             pass
 
     # Final layout: Use 'x unified' hovermode for easier comparison across rows
-    aux_fig.update_layout(height=1000, template='plotly_white', showlegend=False, hovermode='x unified')
+    aux_fig.update_layout(height=1200, template='plotly_white', showlegend=False, hovermode='x unified')
     return aux_fig
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Generate chart.html from a preprocessed JSON file')
-    parser.add_argument('json_path', nargs='?', default='preprocessed_3034.json', help='Path to preprocessed JSON')
+    parser.add_argument('json_path', nargs='?', default=os.path.join(os.path.dirname(__file__), 'preprocessed_1727.json'), help='Path to preprocessed JSON')
     parser.add_argument('--stock_id', '-s', default=None, help='Stock id to display')
     args = parser.parse_args()
 

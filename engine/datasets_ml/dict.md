@@ -14,6 +14,12 @@
 | daily_revenue | 平均月營收/交易日 |
 | trading_days | 交易日數 |
 | avg_per_trading_day | 平均每交易日營收 |
+| eps | 每股盈餘 (EPS) |
+| eps_basic | 每股盈餘 (基本) |
+| gross_profit | 營業毛利 |
+| type | 會計項目說明 |
+| season | 季度 |
+| year | 年度 |
 | MarginPurchaseBuy | 融資買進 |
 | MarginPurchaseSell | 融資賣出 |
 | MarginPurchaseCashRepayment | 融資現金償還 |

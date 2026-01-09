@@ -506,6 +506,248 @@ def get_finmind_balance_sheet(stock_id: str):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@bp.route('/api/finmind/financial_statement/<stock_id>')
+def get_finmind_financial_statement(stock_id: str):
+    """
+    Get consolidated financial statements (income statement, balance sheet, cash flow).
+
+    URL Parameters:
+        stock_id (str): Stock identifier
+
+    Query Parameters:
+        start_date (str): Optional YYYY-MM-DD to limit results (default: '2019-01-01')
+        end_date (str): Optional YYYY-MM-DD to limit results (optional, used for caching filename accuracy)
+
+    Returns:
+        JSON: Financial statement records
+
+    Status Codes:
+        200: Success
+        500: API key not set or API error
+    """
+    try:
+        # Accept optional date params (default start_date per FinMind docs)
+        start_date = request.args.get('start_date', '2019-01-01')
+        end_date = request.args.get('end_date')  # optional, used for cache filename matching
+
+        # Try cache first (use both start/end when available)
+        cached = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+        if cached is not None:
+            return jsonify(cached)
+
+        api_key = os.getenv('FINMIND_API_KEY')
+        if not api_key:
+            return jsonify({'error': 'FinMind API 金鑰未設定'}), 500
+
+        api = DataLoader()
+        api.login_by_token(api_token=api_key)
+
+        # Call the FinMind financial statement API
+        df = api.taiwan_stock_financial_statement(
+            stock_id=stock_id,
+            start_date=start_date
+        )
+
+        response_data = df.to_dict(orient='records')
+        # Determine end_date for filename prefix: prefer provided end_date, else infer from returned rows, else today
+        if not end_date:
+            inferred_end = None
+            if 'date' in df.columns and len(df) > 0:
+                try:
+                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                    inferred_end = df['date'].max().strftime('%Y-%m-%d')
+                except Exception:
+                    inferred_end = None
+            end_date = inferred_end or datetime.now().strftime('%Y-%m-%d')
+
+        save_data_to_datasets(stock_id, response_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+
+        return jsonify(response_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def _process_financial_data(financial_data):
+    """Helper to extract EPS, Gross Profit and series from financial JSON data.
+
+    Supports both "wide" format (one record per date with many columns) and
+    "long" format where each record has 'type' and 'value' (as produced in
+    FinMind CSVs/JSONs). When long-form is detected, pivot into per-date
+    records before extracting EPS and Gross Profit.
+    """
+    latest_eps = None
+    latest_gross = None
+    financial_series = []
+    if not financial_data:
+        return latest_eps, latest_gross, financial_series
+
+    try:
+        fdf = pd.DataFrame(financial_data)
+
+        # If data is long form (type/value pairs), pivot to wide form by date
+        if 'type' in fdf.columns and 'value' in fdf.columns:
+            # Prefer a proper 'date' field if present
+            if 'date' in fdf.columns:
+                fdf['date'] = pd.to_datetime(fdf['date'], errors='coerce')
+                # pivot: index date, columns type, values value
+                try:
+                    pivot = fdf.pivot_table(index='date', columns='type', values='value', aggfunc='first')
+                    pivot = pivot.reset_index()
+                except Exception:
+                    # fallback: groupby and take first
+                    grouped = fdf.groupby(['date', 'type'])['value'].first().unstack(fill_value=None).reset_index()
+                    pivot = grouped
+                fdf = pivot
+            else:
+                # No date column, try year/season combination
+                if 'year' in fdf.columns and 'season' in fdf.columns:
+                    fdf['season'] = fdf['season'].astype(str)
+                    # create a synthetic date-like index 'YYYY-SS'
+                    fdf['period'] = fdf['year'].astype(str) + '-' + fdf['season'].str.zfill(2)
+                    try:
+                        pivot = fdf.pivot_table(index='period', columns='type', values='value', aggfunc='first').reset_index()
+                        fdf = pivot
+                    except Exception:
+                        pass
+
+        # Normalize column names to lower for flexible lookup
+        lower_cols = {c.lower(): c for c in fdf.columns}
+
+        # Discover candidate columns for EPS and Gross Profit
+        eps_candidates = [k for k in lower_cols.keys() if 'eps' in k]
+        gross_candidates = [k for k in lower_cols.keys() if 'gross' in k or 'costofgoods' in k or 'cost_of_goods' in k]
+
+        # Choose preferred columns
+        eps_col = lower_cols.get(eps_candidates[0]) if eps_candidates else None
+        gross_col = None
+        # Prefer explicit gross_profit-like columns; otherwise compute from revenue - cogs if available
+        for g in ['gross_profit', 'grossprofit', 'gross']:
+            if g in lower_cols:
+                gross_col = lower_cols[g]
+                break
+        if not gross_col:
+            # try candidates list
+            gross_col = lower_cols.get(gross_candidates[0]) if gross_candidates else None
+
+        # Ensure we have a date-like index for ordering
+        if 'date' in fdf.columns:
+            try:
+                fdf['date'] = pd.to_datetime(fdf['date'], errors='coerce')
+                fdf = fdf.sort_values('date')
+            except Exception:
+                pass
+        elif 'period' in fdf.columns:
+            # keep as-is
+            pass
+        else:
+            fdf = fdf.sort_index()
+
+        # Prepare series for template (last up to 12 records, sorted descending)
+        rows = fdf.sort_values('date', ascending=False).head(12) if 'date' in fdf.columns else fdf.tail(8)
+        for _, row in rows.iterrows():
+            rec = {'date': None, 'eps': None, 'gross_profit': None}
+
+            # date formatting
+            if 'date' in fdf.columns:
+                val = row.get('date')
+                rec['date'] = val.strftime('%Y-%m-%d') if hasattr(val, 'strftime') else str(val)
+            elif 'period' in fdf.columns:
+                rec['date'] = str(row.get('period'))
+            else:
+                # fallback to year/season
+                if 'year' in row and 'season' in row:
+                    rec['date'] = f"{int(row.get('year'))}-{str(int(row.get('season'))).zfill(2)}"
+                else:
+                    rec['date'] = ''
+
+            # eps value
+            if eps_col and eps_col in row:
+                try:
+                    val = row.get(eps_col)
+                    rec['eps'] = float(val) if pd.notnull(val) else None
+                except Exception:
+                    rec['eps'] = None
+
+            # gross profit value
+            if gross_col and gross_col in row:
+                try:
+                    val = row.get(gross_col)
+                    rec['gross_profit'] = float(val) if pd.notnull(val) else None
+                except Exception:
+                    rec['gross_profit'] = None
+            else:
+                # try computing from Revenue - CostOfGoodsSold if present
+                rev_col = lower_cols.get('revenue')
+                cogs_col = None
+                for c in ['costofgoods', 'cost_of_goods', 'costofgoodssold', 'cost_of_goods_sold']:
+                    if c in lower_cols:
+                        cogs_col = lower_cols[c]
+                        break
+                if rev_col and cogs_col and rev_col in row and cogs_col in row:
+                    try:
+                        r = row.get(rev_col)
+                        c = row.get(cogs_col)
+                        rec['gross_profit'] = float(r) - float(c)
+                    except Exception:
+                        pass
+
+            # capture latest non-null values
+            if latest_eps is None and rec['eps'] is not None:
+                latest_eps = rec['eps']
+            if latest_gross is None and rec['gross_profit'] is not None:
+                latest_gross = rec['gross_profit']
+
+            financial_series.append(rec)
+
+        # Reverse so most recent appears first
+        financial_series = list(reversed(financial_series))
+    except Exception:
+        pass
+
+    return latest_eps, latest_gross, financial_series
+
+@bp.route('/api/finmind/financial_summary/<stock_id>')
+def get_finmind_financial_summary(stock_id: str):
+    """Async endpoint to get processed EPS/GrossProfit summary."""
+    try:
+        # Accept optional start/end params
+        start_date = request.args.get('start_date', '2019-01-01')
+        end_date = request.args.get('end_date')
+
+        # Try cache first (use both start/end when available)
+        financial_data = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+
+        if financial_data is None:
+            api_key = os.getenv('FINMIND_API_KEY')
+            if api_key:
+                api = DataLoader()
+                api.login_by_token(api_token=api_key)
+                df = api.taiwan_stock_financial_statement(stock_id=stock_id, start_date=start_date)
+                financial_data = df.to_dict(orient='records')
+
+                # Determine end_date for filename prefix: prefer provided end_date, else infer from returned rows, else today
+                if not end_date:
+                    inferred_end = None
+                    if 'date' in df.columns and len(df) > 0:
+                        try:
+                            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                            inferred_end = df['date'].max().strftime('%Y-%m-%d')
+                        except Exception:
+                            inferred_end = None
+                    end_date = inferred_end or datetime.now().strftime('%Y-%m-%d')
+
+                save_data_to_datasets(stock_id, financial_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+            else:
+                return jsonify({'error': 'No data found and no API key'}), 404
+
+        latest_eps, latest_gross, financial_series = _process_financial_data(financial_data)
+        return jsonify({
+            'latest_eps': latest_eps,
+            'latest_gross': latest_gross,
+            'financial_series': financial_series
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @bp.route('/api/finmind/dividend/<stock_id>')
 def get_finmind_dividend(stock_id: str):
     """
@@ -1591,41 +1833,59 @@ def get_translation(dataset):
         200: Success
         500: API key not set or API error
     """
+    # Manual mappings for robustness and specific datasets
+    manual_maps = {
+        'TaiwanStockFinancialStatement': {
+            'eps': '每股盈餘 (EPS)',
+            'eps_basic': '每股盈餘 (基本)',
+            'gross_profit': '營業毛利',
+            'revenue': '營業收入',
+            'date': '日期',
+            'type': '會計項目說明'
+        },
+        'TaiwanStockMonthRevenue': {
+            'revenue': '月營收',
+            'revenue_year': '年度',
+            'revenue_month': '月份'
+        }
+    }
+
     # Try cache first (allow returning cached translations without API key)
     cached = load_data_from_datasets(dataset, 'finmind_translation')
-    if cached is not None:
-        return jsonify(cached)
-
+    
     token = os.getenv('FINMIND_API_KEY')
-    if not token:
-        return jsonify({'error': 'FinMind API 金鑰未設定'}), 500
     
-    url = "https://api.finmindtrade.com/api/v4/translation"
-    params = {
-        'dataset': dataset,
-        'token': token
-    }
-    
-    try:
-
-        resp = requests.get(url, params=params)
-        data = resp.json()
-        # Check if the response contains translation data
-        if 'data' in data and isinstance(data['data'], dict):
-            save_data_to_datasets(dataset, data['data'], 'finmind_translation')
-            return jsonify(data['data'])
-        elif 'detail' in data:
-            # API validation error - dataset not supported
-            return jsonify({}), 200  # Return empty dict, frontend will use fallbacks
-        else:
-            # Try to return data directly if it's a dict
-            if isinstance(data, dict):
+    result_map = {}
+    if cached is not None:
+        result_map = cached
+    elif token:
+        url = "https://api.finmindtrade.com/api/v4/translation"
+        params = {
+            'dataset': dataset,
+            'token': token
+        }
+        try:
+            resp = requests.get(url, params=params)
+            data = resp.json()
+            # Check if the response contains translation data
+            if 'data' in data and isinstance(data['data'], dict):
+                save_data_to_datasets(dataset, data['data'], 'finmind_translation')
+                result_map = data['data']
+            elif 'detail' in data:
+                result_map = {}
+            elif isinstance(data, dict):
                 save_data_to_datasets(dataset, data, 'finmind_translation')
-                return jsonify(data)
-            else:
-                return jsonify({}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+                result_map = data
+        except Exception:
+            result_map = {}
+
+    # Merge with manual map if available
+    if dataset in manual_maps:
+        if not result_map:
+            result_map = {}
+        result_map.update(manual_maps[dataset])
+        
+    return jsonify(result_map)
 
 @bp.route('/api/finmind/user_info')
 def get_user_info():
@@ -1721,10 +1981,82 @@ def finmind_dashboard() -> str:
                 revenue_data = df.to_dict(orient='records')
                 save_data_to_datasets(stock_id, revenue_data, 'finmind_revenue', start_date, end_date)
 
+        # Fetch financial statement (EPS, Gross Profit)
+        # Use a broader start_date for financials if possible (defaulting to input start_date)
+        financial_data = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+        if financial_data is None and api:
+            try:
+                # Per FinMind tutor, financial statements often need a 2019 baseline or similar
+                df = api.taiwan_stock_financial_statement(stock_id=stock_id, start_date=start_date)
+                financial_data = df.to_dict(orient='records')
+                # infer inferred_end_date from returned rows when possible
+                inferred_end_date = None
+                if 'date' in df.columns and len(df) > 0:
+                    try:
+                        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                        inferred_end_date = df['date'].max().strftime('%Y-%m-%d')
+                    except Exception:
+                        inferred_end_date = None
+                if not inferred_end_date:
+                    inferred_end_date = datetime.now().strftime('%Y-%m-%d')
+                # Removed early save of raw quarterly data
+            except Exception:
+                financial_data = None
+
+        # Extract EPS and Gross Profit using helper
+        latest_eps, latest_gross, financial_series = _process_financial_data(financial_data)
+
+        # Build backward-filled daily financial series aligned to trading days (use next announcement's value for prior days)
+        financial_daily = []
+        try:
+            if financial_data and price_data:
+                import pandas as _pd
+                df_fin = _pd.DataFrame(financial_data)
+                if 'type' in df_fin.columns and 'value' in df_fin.columns:
+                    df_fin_wide = df_fin.pivot_table(index='date', columns='type', values='value', aggfunc='first').reset_index()
+                else:
+                    df_fin_wide = df_fin.copy()
+
+                eps_col = None
+                gross_col = None
+                for c in df_fin_wide.columns:
+                    lc = c.lower()
+                    if lc == 'eps' or lc.startswith('eps'):
+                        eps_col = c
+                    if lc in ('grossprofit','gross_profit','gross'):
+                        gross_col = c
+
+                df_fin_wide['date'] = _pd.to_datetime(df_fin_wide['date'])
+                df_fin_wide = df_fin_wide.set_index('date').sort_index()
+                df_price = _pd.DataFrame(price_data)
+                df_price['date'] = _pd.to_datetime(df_price['date'])
+                idx = _pd.Index(sorted(df_price['date'].unique()))
+                fin_daily = df_fin_wide.reindex(idx).bfill()
+
+                for ddate, r in fin_daily.iterrows():
+                    financial_daily.append({
+                        'date': ddate.strftime('%Y-%m-%d'),
+                        'eps': float(r.get(eps_col)) if eps_col and not _pd.isna(r.get(eps_col)) else None,
+                        'gross_profit': float(r.get(gross_col)) if gross_col and not _pd.isna(r.get(gross_col)) else None
+                    })
+
+                # Save daily sequential financial data to cache
+                save_data_to_datasets(stock_id, financial_daily, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+        except Exception:
+            financial_daily = []
+
         # Generate chart (include revenue)
         chart_html = generate_plotly_kline_chart(price_data, institutional_data, margin_data, revenue_data, stock_id)
 
-        return render_template('finmind_dashboard.html', chart_html=chart_html, stock_id=stock_id, start_date=start_date, end_date=end_date)
+        # Generate separate financial chart (EPS + GrossProfit)
+        try:
+            from app.utils import generate_financial_chart
+            financial_chart_html = generate_financial_chart(financial_daily, stock_id)
+        except Exception:
+            financial_chart_html = ''
+
+        return render_template('finmind_dashboard.html', chart_html=chart_html, stock_id=stock_id, start_date=start_date, end_date=end_date,
+                               financial_series=financial_series, latest_eps=latest_eps, latest_gross=latest_gross, financial_chart_html=financial_chart_html)
     
     # Default values for GET
     default_end = datetime.now().strftime('%Y-%m-%d')
@@ -1767,7 +2099,8 @@ def save_dashboard():
             'finmind_taiwan_stock_price',
             'finmind_institutional',
             'finmind_margin',
-            'finmind_revenue'
+            'finmind_revenue',
+            'finmind_financial_statement'
         ]
 
         combined = {
@@ -1804,9 +2137,13 @@ def save_dashboard():
                         df = api.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=end_date)
                     elif api_name == 'finmind_revenue':
                         df = api.taiwan_stock_month_revenue(stock_id=stock_id, start_date=start_date)
+                    elif api_name == 'finmind_financial_statement':
+                        # Financial statements are typically reported quarterly; fetch range if provided
+                        df = api.taiwan_stock_financial_statement(stock_id=stock_id, start_date=start_date, end_date=end_date)
 
                     data = df.to_dict(orient='records')
-                    save_data_to_datasets(stock_id, data, api_name, start_date, end_date)
+                    if api_name != 'finmind_financial_statement':
+                        save_data_to_datasets(stock_id, data, api_name, start_date, end_date)
                     source = 'finmind'
                 except Exception as e:
                     results[api_name] = {'ok': False, 'error': str(e)}
@@ -1853,6 +2190,51 @@ def save_dashboard():
                         })
 
                     combined['datasets'].setdefault('finmind_revenue', {})['derived'] = {'monthly_aggregates': monthly}
+        except Exception:
+            pass
+
+        # Build backward-filled daily financial series (EPS: seasonal; GrossProfit: absolute)
+        try:
+            fin_ds = combined['datasets'].get('finmind_financial_statement', {})
+            fin_records = fin_ds.get('records') or []
+            price_ds = combined['datasets'].get('finmind_taiwan_stock_price', {})
+            price_records = price_ds.get('records') or []
+            if fin_records and price_records:
+                df_fin = pd.DataFrame(fin_records)
+                # Pivot long-form (type/value) into wide form if needed
+                if 'type' in df_fin.columns and 'value' in df_fin.columns:
+                    df_fin_wide = df_fin.pivot_table(index='date', columns='type', values='value', aggfunc='first').reset_index()
+                else:
+                    df_fin_wide = df_fin.copy()
+
+                # Normalize column names and find EPS / GrossProfit columns
+                eps_col = None
+                gross_col = None
+                for c in df_fin_wide.columns:
+                    lc = c.lower()
+                    if 'eps' == lc or lc.startswith('eps'):
+                        eps_col = c
+                    if lc in ('grossprofit','gross_profit','gross'):
+                        gross_col = c
+
+                # Prepare index aligned to trading dates and backward-fill
+                df_fin_wide['date'] = pd.to_datetime(df_fin_wide['date'])
+                df_fin_wide = df_fin_wide.set_index('date').sort_index()
+                df_price = pd.DataFrame(price_records)
+                df_price['date'] = pd.to_datetime(df_price['date'])
+                idx = pd.Index(sorted(df_price['date'].unique()))
+                fin_daily = df_fin_wide.reindex(idx).bfill()
+
+                daily = []
+                for ddate, row in fin_daily.iterrows():
+                    rec = {'date': ddate.strftime('%Y-%m-%d')}
+                    rec['eps'] = float(row.get(eps_col)) if eps_col and not pd.isna(row.get(eps_col)) else None
+                    rec['gross_profit'] = float(row.get(gross_col)) if gross_col and not pd.isna(row.get(gross_col)) else None
+                    daily.append(rec)
+
+                combined['datasets'].setdefault('finmind_financial_statement', {}).setdefault('derived', {})['daily_financial_series'] = daily
+                # Save processed daily financial series to its own dataset cache
+                save_data_to_datasets(stock_id, daily, 'finmind_financial_statement', start_date, end_date)
         except Exception:
             pass
 
