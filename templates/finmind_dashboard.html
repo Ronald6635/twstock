@@ -5,7 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FinMind 股票儀表板</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
+    <style>
+        /* Additional styles for fuzzy search suggestions */
+        .suggestions {
+            position: absolute;
+            background: white;
+            border: 1px solid #ccc;
+            max-height: 200px;
+            overflow-y: auto;
+            width: calc(100% - 2px);
+            z-index: 1000;
+            display: none;
+        }
+        .suggestion-item {
+            padding: 8px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+        .suggestion-item:hover, .suggestion-item:focus {
+            background: #f0f0f0;
+        }
+        .stock-input-container {
+            position: relative;
+        }
+    </style>
 <body>
     <div class="container" style="max-width: 1400px;">
         <h1>📊 FinMind 股票分析儀表板</h1>
@@ -19,9 +42,10 @@
         
         <form method="POST" class="controls" id="dashboard-form">
             <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; justify-content: center;">
-                <div>
-                    <label for="stock_id">股票代碼：</label>
-                    <input type="text" id="stock_id" name="stock_id" value="{{ stock_id or '2379' }}" required style="width: 80px;">
+                <div class="stock-input-container">
+                    <label for="stock_id">股票代碼/名稱：</label>
+                    <input type="text" id="stock_id" name="stock_id" value="{{ stock_id or '2379' }}" required style="width: 80px;" autocomplete="off" aria-describedby="stock-help" aria-expanded="false" aria-haspopup="listbox" role="combobox">
+                    <div class="suggestions" id="suggestions" role="listbox" aria-label="Stock suggestions"></div>
                 </div>
                 <div>
                     <label for="start_date">開始日期：</label>
@@ -32,45 +56,9 @@
                     <input type="date" id="end_date" name="end_date" value="{{ end_date or '2026-01-07' }}" required>
                 </div>
                 <button type="submit" style="padding: 10px 25px;">即時產生分析圖表</button>
-
-                <!-- Financial summary container (Ajax updated) -->
-                <div id="financial-summary-container" style="flex-basis: 100%; width: 100%; margin-top: 15px;">
-                  {% if financial_series or latest_eps or latest_gross %}
-                    <!-- Financial summary panel -->
-                    <div class="financial-panel" style="display:flex; gap:20px; align-items:center; justify-content:center;">
-                        <div style="padding:12px; background:#f9f9ff; border-radius:8px; text-align:center; min-width:160px; border:1px solid #e0e0ff;">
-                            <div style="font-size:0.9em; color:#666;">最新 EPS</div>
-                            <div id="summary-eps" style="font-size:1.4em; font-weight:600; margin-top:6px;">{{ '%.2f'|format(latest_eps) if latest_eps is not none else '—' }}</div>
-                        </div>
-                        <div style="padding:12px; background:#fff9f0; border-radius:8px; text-align:center; min-width:200px; border:1px solid #ffe0b0;">
-                            <div style="font-size:0.9em; color:#666;">最新 毛利 (Gross Profit)</div>
-                            <div id="summary-gross" style="font-size:1.2em; font-weight:600; margin-top:6px;">{{ '{:,.0f}'.format(latest_gross) if latest_gross is not none else '—' }}</div>
-                        </div>
-                    </div>
-
-                    <!-- Recent financial statement rows -->
-                    <div id="financial-table-wrapper" style="max-width:800px; margin:15px auto 0; overflow-x: auto;">
-                        <table style="width:100%; border-collapse:collapse; font-size:0.9em; background:#fff;">
-                            <thead>
-                                <tr style="background:#f8f9fa;">
-                                    <th style="padding:8px; text-align:left; border-bottom:2px solid #dee2e6;">日期</th>
-                                    <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">EPS</th>
-                                    <th style="padding:8px; text-align:right; border-bottom:2px solid #dee2e6;">毛利 (Gross Profit)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="financial-table-body">
-                                {% for r in financial_series %}
-                                <tr style="border-bottom:1px solid #eee;">
-                                    <td style="padding:8px;">{{ r.date if r.date else '' }}</td>
-                                    <td style="padding:8px; text-align:right;">{{ '%.2f'|format(r.eps) if r.eps is not none else '—' }}</td>
-                                    <td style="padding:8px; text-align:right;">{{ '{:,.0f}'.format(r.gross_profit) if r.gross_profit is not none else '—' }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                  {% endif %}
-                </div>
+            </div>
+            <div id="stock-help" style="text-align: center; margin-top: 5px; font-size: 0.9em; color: #666;">
+                輸入股票代碼或名稱，系統將提供模糊搜尋建議。
             </div>
         </form>
         
@@ -96,6 +84,90 @@
     </div>
 
     <script>
+        // Embed stock data from tw_stock_info.json for fuzzy search
+        const stockData = {{ stock_data | tojson }};
+        
+        // Fuzzy search function (simple substring + Levenshtein-like matching)
+        function fuzzySearch(query, data, limit = 10) {
+            if (!query) return [];
+            const lowerQuery = query.toLowerCase();
+            return data
+                .filter(stock => 
+                    stock.stock_id.toLowerCase().includes(lowerQuery) || 
+                    (stock.stock_name && stock.stock_name.toLowerCase().includes(lowerQuery))
+                )
+                .sort((a, b) => {
+                    // Prioritize exact ID matches, then name matches
+                    const aIdMatch = a.stock_id.toLowerCase().startsWith(lowerQuery);
+                    const bIdMatch = b.stock_id.toLowerCase().startsWith(lowerQuery);
+                    if (aIdMatch && !bIdMatch) return -1;
+                    if (!aIdMatch && bIdMatch) return 1;
+                    return a.stock_id.localeCompare(b.stock_id);
+                })
+                .slice(0, limit);
+        }
+        
+        // Debounce function to limit search frequency
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+        
+        // Update suggestions on input
+        const stockInput = document.getElementById('stock_id');
+        const suggestionsDiv = document.getElementById('suggestions');
+        
+        const updateSuggestions = debounce(() => {
+            const query = stockInput.value.trim();
+            const matches = fuzzySearch(query, stockData);
+            
+            suggestionsDiv.innerHTML = '';
+            if (matches.length > 0) {
+                matches.forEach((stock, index) => {
+                    const item = document.createElement('div');
+                    item.className = 'suggestion-item';
+                    item.textContent = `${stock.stock_id} - ${stock.stock_name || 'N/A'}`;
+                    item.setAttribute('role', 'option');
+                    item.setAttribute('tabindex', '0');
+                    item.addEventListener('click', () => {
+                        stockInput.value = stock.stock_id;
+                        suggestionsDiv.style.display = 'none';
+                        stockInput.focus();
+                    });
+                    item.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            item.click();
+                        }
+                    });
+                    suggestionsDiv.appendChild(item);
+                });
+                suggestionsDiv.style.display = 'block';
+                stockInput.setAttribute('aria-expanded', 'true');
+            } else {
+                suggestionsDiv.style.display = 'none';
+                stockInput.setAttribute('aria-expanded', 'false');
+            }
+        }, 300);
+        
+        stockInput.addEventListener('input', updateSuggestions);
+        stockInput.addEventListener('focus', updateSuggestions);
+        
+        // Hide suggestions on outside click
+        document.addEventListener('click', (e) => {
+            if (!stockInput.contains(e.target) && !suggestionsDiv.contains(e.target)) {
+                suggestionsDiv.style.display = 'none';
+                stockInput.setAttribute('aria-expanded', 'false');
+            }
+        });
+        
         async function loadUserInfo() {
             try {
                 const resp = await fetch('/api/finmind/user_info');

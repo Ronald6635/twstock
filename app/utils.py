@@ -487,11 +487,20 @@ def generate_plotly_kline_chart(price_data, institutional_data, margin_data, rev
         spikedistance=-1, # Crosshair style
     )
 
-    # Hide weekends for all x-axes
+    # Hide weekends and non-trading weekdays (holidays) for all x-axes
+    try:
+        # Build a list of non-weekend dates between min and max that are missing from trading data
+        full_range = pd.date_range(df_price['date'].min(), df_price['date'].max(), freq='D')
+        existing_dates = set(df_price['date'].dt.normalize())
+        missing_weekdays = [d.strftime('%Y-%m-%d') for d in full_range if d.weekday() < 5 and d.normalize() not in existing_dates]
+        rangebreaks = [dict(bounds=["sat", "mon"])]
+        if missing_weekdays:
+            rangebreaks.append(dict(values=missing_weekdays))
+    except Exception:
+        rangebreaks = [dict(bounds=["sat", "mon"])]
+
     fig.update_xaxes(
-        rangebreaks=[
-            dict(bounds=["sat", "mon"]), # hide weekends
-        ],
+        rangebreaks=rangebreaks,
         showspikes=True, # Show vertical line on hover
         spikemode='across',
         spikethickness=1,

@@ -1927,6 +1927,10 @@ def finmind_dashboard() -> str:
     Returns:
         str: Rendered HTML template for the dashboard.
     """
+    import json
+    with open('docs/tw_stock_info.json', 'r', encoding='utf-8') as f:
+        stock_data = json.load(f)
+    
     # Ensure api_key is available in all branches to avoid UnboundLocalError
     api_key = os.getenv('FINMIND_API_KEY')
     api = None
@@ -2056,11 +2060,11 @@ def finmind_dashboard() -> str:
             financial_chart_html = ''
 
         return render_template('finmind_dashboard.html', chart_html=chart_html, stock_id=stock_id, start_date=start_date, end_date=end_date,
-                               financial_series=financial_series, latest_eps=latest_eps, latest_gross=latest_gross, financial_chart_html=financial_chart_html)
+                               financial_series=financial_series, latest_eps=latest_eps, latest_gross=latest_gross, financial_chart_html=financial_chart_html, stock_data=stock_data)
     
     # Default values for GET
     default_end = datetime.now().strftime('%Y-%m-%d')
-    return render_template('finmind_dashboard.html', stock_id='2379', start_date='2025-01-01', end_date=default_end)
+    return render_template('finmind_dashboard.html', stock_id='2379', start_date='2025-01-01', end_date=default_end, stock_data=stock_data)
 
 
 @bp.route('/api/finmind/save_dashboard', methods=['POST'])
