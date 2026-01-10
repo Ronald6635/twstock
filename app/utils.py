@@ -626,8 +626,8 @@ def _select_best_cover(candidates):
     return scored[0][2], scored[0][3], scored[0][4]
 
 
-def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, max_age_days=None):
-    """Load cached JSON data from datasets folder.
+def load_data_from_cache(stock_id, api_name, start_date=None, end_date=None, max_age_days=None):
+    """Load cached JSON data from cache folder.
 
     Parameters:
         stock_id (str): stock code or key used when saving (e.g., '2330', 'all', 'gold')
@@ -644,7 +644,7 @@ def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, 
     company_name = code_info.name if code_info else stock_id  # Fallback to stock_id
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', f'{company_name}-{stock_id}')
+    folder = os.path.join(project_root, 'cache', f'{company_name}-{stock_id}')
     if not os.path.isdir(folder):
         return None
 
@@ -758,8 +758,8 @@ def load_data_from_datasets(stock_id, api_name, start_date=None, end_date=None, 
         return None
 
 
-def save_data_to_datasets(stock_id, data, api_name, start_date=None, end_date=None):
-    """Save API data to datasets/ with subfolder naming.
+def save_data_to_cache(stock_id, data, api_name, start_date=None, end_date=None):
+    """Save API data to cache/ with subfolder naming.
 
     If the endpoint provides a start_date and end_date, use them to prefix the
     saved filenames ("{start}_{end}_{api_name}.json/csv"). Otherwise fall back
@@ -772,7 +772,7 @@ def save_data_to_datasets(stock_id, data, api_name, start_date=None, end_date=No
 
     # Use absolute path relative to the project root
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', f'{company_name}-{stock_id}')
+    folder = os.path.join(project_root, 'cache', f'{company_name}-{stock_id}')
     os.makedirs(folder, exist_ok=True)
 
     # Prefer start/end dates from the caller when available
@@ -909,13 +909,13 @@ def save_data_to_datasets(stock_id, data, api_name, start_date=None, end_date=No
 
 
 def write_combined_files(company: str, stock_id: str, start_date: str, end_date: str, combined_obj: dict, target_root: str = None) -> dict:
-    """Write a combined JSON + flattened CSV for multiple datasets.
+    """Write a combined JSON + flattened CSV for multiple cached data sources.
 
     Returns a dict with keys 'json' and 'csv' pointing to the saved file paths.
     """
     if target_root is None:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        target_root = os.path.join(project_root, 'engine', 'datasets_ml')
+        target_root = os.path.join(project_root, 'engine', 'datasets')
 
     # sanitize company for filesystem (basic)
     company_safe = company.replace('/', '-').strip() if company else stock_id
@@ -946,7 +946,8 @@ def write_combined_files(company: str, stock_id: str, start_date: str, end_date:
     ]
 
     rows = []
-    datasets = combined_obj.get('datasets', {})
+    # Both 'cache' and 'datasets' are supported for backward compatibility with old records
+    datasets = combined_obj.get('cache', combined_obj.get('datasets', {}))
     created_at = combined_obj.get('meta', {}).get('created_at')
 
     for dataset_name, ds in datasets.items():

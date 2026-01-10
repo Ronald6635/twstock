@@ -1,4 +1,4 @@
-"""
+﻿"""
 FinMind API Integration Module
 
 This module provides Flask routes for accessing FinMind's Taiwan stock market data.
@@ -6,7 +6,7 @@ It supports all Free-tier datasets including technical, fundamental, and other m
 
 Key features:
 - Comprehensive Taiwan stock data access
-- Automatic data caching to datasets
+- Automatic data caching to cache
 - Chart generation for price data
 - Error handling and API key validation
 
@@ -22,7 +22,7 @@ import requests
 from datetime import datetime, timedelta
 from FinMind.data import DataLoader
 import pandas as pd
-from .utils import save_data_to_datasets, generate_stock_chart, generate_kline_chart, load_data_from_datasets, generate_plotly_kline_chart, write_combined_files
+from .utils import save_data_to_cache, generate_stock_chart, generate_kline_chart, load_data_from_cache, generate_plotly_kline_chart, write_combined_files
 from typing import Dict, List, Any, Optional
 
 bp = Blueprint('finmind', __name__)
@@ -47,7 +47,7 @@ def get_finmind_stock_info():
     """
     try:
         # Return cached if available before requiring API key
-        cached = load_data_from_datasets('all', 'finmind_stock_info')
+        cached = load_data_from_cache('all', 'finmind_stock_info')
         if cached is not None:
             return jsonify(cached)
 
@@ -60,7 +60,7 @@ def get_finmind_stock_info():
 
         df = api.taiwan_stock_info()
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('all', response_data, 'finmind_stock_info')
+        save_data_to_cache('all', response_data, 'finmind_stock_info')
 
         return jsonify(response_data)
     except Exception as e:
@@ -82,7 +82,7 @@ def get_finmind_trading_days():
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets('trading_days', 'finmind_trading_days')
+        cached = load_data_from_cache('trading_days', 'finmind_trading_days')
         if cached is not None:
             return jsonify(cached)
 
@@ -95,7 +95,7 @@ def get_finmind_trading_days():
 
         df = api.taiwan_stock_trading_days()
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('trading_days', response_data, 'finmind_trading_days')
+        save_data_to_cache('trading_days', response_data, 'finmind_trading_days')
 
         return jsonify(response_data)
     except Exception as e:
@@ -120,7 +120,7 @@ def get_finmind_sector_price(sector: str):
         # Prepare date range and try cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets(sector, 'finmind_sector_price', start_date, end_date)
+        cached = load_data_from_cache(sector, 'finmind_sector_price', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -138,7 +138,7 @@ def get_finmind_sector_price(sector: str):
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(sector, response_data, 'finmind_sector_price', start_date, end_date)
+        save_data_to_cache(sector, response_data, 'finmind_sector_price', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -163,7 +163,7 @@ def get_finmind_index():
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-        cached = load_data_from_datasets('TAIEX', 'finmind_index', start_date, end_date)
+        cached = load_data_from_cache('TAIEX', 'finmind_index', start_date, end_date)
         if cached is not None:
             chart_image_base64 = generate_stock_chart([d['date'] for d in cached], [d['price'] for d in cached], 'TAIEX')
             return jsonify({'data': cached, 'chart_image': chart_image_base64})
@@ -183,7 +183,7 @@ def get_finmind_index():
 
         response_data = df.to_dict(orient='records')
         chart_image_base64 = generate_stock_chart([d['date'] for d in response_data], [d['price'] for d in response_data], 'TAIEX')
-        save_data_to_datasets('TAIEX', response_data, 'finmind_index', start_date, end_date)
+        save_data_to_cache('TAIEX', response_data, 'finmind_index', start_date, end_date)
 
         return jsonify({'data': response_data, 'chart_image': chart_image_base64})
     except Exception as e:
@@ -207,7 +207,7 @@ def get_finmind_index_return():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('index_return', 'finmind_index_return', start_date, end_date)
+        cached = load_data_from_cache('index_return', 'finmind_index_return', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -224,7 +224,7 @@ def get_finmind_index_return():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('index_return', response_data, 'finmind_index_return', start_date, end_date)
+        save_data_to_cache('index_return', response_data, 'finmind_index_return', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -252,7 +252,7 @@ def get_finmind_margin_total():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('total', 'finmind_margin_total', start_date, end_date)
+        cached = load_data_from_cache('total', 'finmind_margin_total', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -269,7 +269,7 @@ def get_finmind_margin_total():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('total', response_data, 'finmind_margin_total', start_date, end_date)
+        save_data_to_cache('total', response_data, 'finmind_margin_total', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -293,7 +293,7 @@ def get_finmind_institutional_total():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('total', 'finmind_institutional_total', start_date, end_date)
+        cached = load_data_from_cache('total', 'finmind_institutional_total', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -310,7 +310,7 @@ def get_finmind_institutional_total():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('total', response_data, 'finmind_institutional_total', start_date, end_date)
+        save_data_to_cache('total', response_data, 'finmind_institutional_total', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -339,13 +339,13 @@ def get_finmind_holders(stock_id: str):
         api = DataLoader()
         api.login_by_token(api_token=api_key)
 
-        cached = load_data_from_datasets(stock_id, 'finmind_holders')
+        cached = load_data_from_cache(stock_id, 'finmind_holders')
         if cached is not None:
             return jsonify(cached)
 
         df = api.taiwan_stock_holders(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_holders')
+        save_data_to_cache(stock_id, response_data, 'finmind_holders')
 
         return jsonify(response_data)
     except Exception as e:
@@ -370,7 +370,7 @@ def get_finmind_securities_lending(stock_id: str):
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets(stock_id, 'finmind_securities_lending', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_securities_lending', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -388,7 +388,7 @@ def get_finmind_securities_lending(stock_id: str):
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_securities_lending', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_securities_lending', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -415,7 +415,7 @@ def get_finmind_cash_flow(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_cash_flow')
+        cached = load_data_from_cache(stock_id, 'finmind_cash_flow')
         if cached is not None:
             return jsonify(cached)
 
@@ -428,7 +428,7 @@ def get_finmind_cash_flow(stock_id: str):
 
         df = api.taiwan_stock_cash_flows_statement(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_cash_flow')
+        save_data_to_cache(stock_id, response_data, 'finmind_cash_flow')
 
         return jsonify(response_data)
     except Exception as e:
@@ -451,7 +451,7 @@ def get_finmind_income_statement(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_income_statement')
+        cached = load_data_from_cache(stock_id, 'finmind_income_statement')
         if cached is not None:
             return jsonify(cached)
 
@@ -464,7 +464,7 @@ def get_finmind_income_statement(stock_id: str):
 
         df = api.taiwan_stock_income_statement(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_income_statement')
+        save_data_to_cache(stock_id, response_data, 'finmind_income_statement')
 
         return jsonify(response_data)
     except Exception as e:
@@ -487,7 +487,7 @@ def get_finmind_balance_sheet(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_balance_sheet')
+        cached = load_data_from_cache(stock_id, 'finmind_balance_sheet')
         if cached is not None:
             return jsonify(cached)
 
@@ -500,7 +500,7 @@ def get_finmind_balance_sheet(stock_id: str):
 
         df = api.taiwan_stock_balance_sheet(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_balance_sheet')
+        save_data_to_cache(stock_id, response_data, 'finmind_balance_sheet')
 
         return jsonify(response_data)
     except Exception as e:
@@ -531,7 +531,7 @@ def get_finmind_financial_statement(stock_id: str):
         end_date = request.args.get('end_date')  # optional, used for cache filename matching
 
         # Try cache first (use both start/end when available)
-        cached = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+        cached = load_data_from_cache(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_cache(stock_id, 'finmind_financial_statement', start_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -560,7 +560,7 @@ def get_finmind_financial_statement(stock_id: str):
                     inferred_end = None
             end_date = inferred_end or datetime.now().strftime('%Y-%m-%d')
 
-        save_data_to_datasets(stock_id, response_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -714,7 +714,7 @@ def get_finmind_financial_summary(stock_id: str):
         end_date = request.args.get('end_date')
 
         # Try cache first (use both start/end when available)
-        financial_data = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+        financial_data = load_data_from_cache(stock_id, 'finmind_financial_statement', start_date, end_date) if end_date else load_data_from_cache(stock_id, 'finmind_financial_statement', start_date)
 
         if financial_data is None:
             api_key = os.getenv('FINMIND_API_KEY')
@@ -735,7 +735,7 @@ def get_finmind_financial_summary(stock_id: str):
                             inferred_end = None
                     end_date = inferred_end or datetime.now().strftime('%Y-%m-%d')
 
-                save_data_to_datasets(stock_id, financial_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+                save_data_to_cache(stock_id, financial_data, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
             else:
                 return jsonify({'error': 'No data found and no API key'}), 404
 
@@ -765,7 +765,7 @@ def get_finmind_dividend(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_dividend')
+        cached = load_data_from_cache(stock_id, 'finmind_dividend')
         if cached is not None:
             return jsonify(cached)
 
@@ -778,7 +778,7 @@ def get_finmind_dividend(stock_id: str):
 
         df = api.taiwan_stock_dividend(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_dividend')
+        save_data_to_cache(stock_id, response_data, 'finmind_dividend')
 
         return jsonify(response_data)
     except Exception as e:
@@ -801,7 +801,7 @@ def get_finmind_ex_dividend(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_ex_dividend')
+        cached = load_data_from_cache(stock_id, 'finmind_ex_dividend')
         if cached is not None:
             return jsonify(cached)
 
@@ -814,7 +814,7 @@ def get_finmind_ex_dividend(stock_id: str):
 
         df = api.taiwan_stock_ex_dividend(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_ex_dividend')
+        save_data_to_cache(stock_id, response_data, 'finmind_ex_dividend')
 
         return jsonify(response_data)
     except Exception as e:
@@ -836,7 +836,7 @@ def get_finmind_delisted():
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets('delisted', 'finmind_delisted')
+        cached = load_data_from_cache('delisted', 'finmind_delisted')
         if cached is not None:
             return jsonify(cached)
 
@@ -849,7 +849,7 @@ def get_finmind_delisted():
 
         df = api.taiwan_stock_delisted()
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('delisted', response_data, 'finmind_delisted')
+        save_data_to_cache('delisted', response_data, 'finmind_delisted')
 
         return jsonify(response_data)
     except Exception as e:
@@ -872,7 +872,7 @@ def get_finmind_split(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_split')
+        cached = load_data_from_cache(stock_id, 'finmind_split')
         if cached is not None:
             return jsonify(cached)
 
@@ -885,7 +885,7 @@ def get_finmind_split(stock_id: str):
 
         df = api.taiwan_stock_split(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_split')
+        save_data_to_cache(stock_id, response_data, 'finmind_split')
 
         return jsonify(response_data)
     except Exception as e:
@@ -908,7 +908,7 @@ def get_finmind_face_value_change(stock_id: str):
     """
     try:
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_face_value_change')
+        cached = load_data_from_cache(stock_id, 'finmind_face_value_change')
         if cached is not None:
             return jsonify(cached)
 
@@ -921,7 +921,7 @@ def get_finmind_face_value_change(stock_id: str):
 
         df = api.taiwan_stock_face_value_change(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_face_value_change')
+        save_data_to_cache(stock_id, response_data, 'finmind_face_value_change')
 
         return jsonify(response_data)
     except Exception as e:
@@ -949,7 +949,7 @@ def get_finmind_futures_options_daily():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('futures_options', 'finmind_futures_options_daily', start_date, end_date)
+        cached = load_data_from_cache('futures_options', 'finmind_futures_options_daily', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -966,7 +966,7 @@ def get_finmind_futures_options_daily():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('futures_options', response_data, 'finmind_futures_options_daily', start_date, end_date)
+        save_data_to_cache('futures_options', response_data, 'finmind_futures_options_daily', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -990,7 +990,7 @@ def get_finmind_futures_daily():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('futures', 'finmind_futures_daily', start_date, end_date)
+        cached = load_data_from_cache('futures', 'finmind_futures_daily', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1007,7 +1007,7 @@ def get_finmind_futures_daily():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('futures', response_data, 'finmind_futures_daily', start_date, end_date)
+        save_data_to_cache('futures', response_data, 'finmind_futures_daily', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1031,7 +1031,7 @@ def get_finmind_options_daily():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('options', 'finmind_options_daily', start_date, end_date)
+        cached = load_data_from_cache('options', 'finmind_options_daily', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1048,7 +1048,7 @@ def get_finmind_options_daily():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('options', response_data, 'finmind_options_daily', start_date, end_date)
+        save_data_to_cache('options', response_data, 'finmind_options_daily', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1072,7 +1072,7 @@ def get_finmind_futures_institutional():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('futures_institutional', 'finmind_futures_institutional', start_date, end_date)
+        cached = load_data_from_cache('futures_institutional', 'finmind_futures_institutional', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1089,7 +1089,7 @@ def get_finmind_futures_institutional():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('futures_institutional', response_data, 'finmind_futures_institutional', start_date, end_date)
+        save_data_to_cache('futures_institutional', response_data, 'finmind_futures_institutional', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1113,7 +1113,7 @@ def get_finmind_options_institutional():
         # Prepare dates and check cache first
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        cached = load_data_from_datasets('options_institutional', 'finmind_options_institutional', start_date, end_date)
+        cached = load_data_from_cache('options_institutional', 'finmind_options_institutional', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1130,7 +1130,7 @@ def get_finmind_options_institutional():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('options_institutional', response_data, 'finmind_options_institutional', start_date, end_date)
+        save_data_to_cache('options_institutional', response_data, 'finmind_options_institutional', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1163,13 +1163,13 @@ def get_finmind_news(stock_id: str):
         api = DataLoader()
         api.login_by_token(api_token=api_key)
 
-        cached = load_data_from_datasets(stock_id, 'finmind_news')
+        cached = load_data_from_cache(stock_id, 'finmind_news')
         if cached is not None:
             return jsonify(cached)
 
         df = api.taiwan_stock_news(stock_id=stock_id)
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_news')
+        save_data_to_cache(stock_id, response_data, 'finmind_news')
 
         return jsonify(response_data)
     except Exception as e:
@@ -1202,7 +1202,7 @@ def get_finmind_gold_price():
         end_date = request.args.get('end_date') or datetime.now().strftime('%Y-%m-%d')
 
         # Try cache first
-        cached = load_data_from_datasets('gold', 'finmind_gold_price', start_date, end_date)
+        cached = load_data_from_cache('gold', 'finmind_gold_price', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1223,8 +1223,8 @@ def get_finmind_gold_price():
         data = resp.json()
         response_data = data.get('data', [])
 
-        # Save to datasets for caching/analysis
-        save_data_to_datasets('gold', response_data, 'finmind_gold_price', start_date, end_date)
+        # Save to cache for caching/analysis
+        save_data_to_cache('gold', response_data, 'finmind_gold_price', start_date, end_date)
 
         return jsonify(response_data)
     except requests.HTTPError as he:
@@ -1254,7 +1254,7 @@ def get_finmind_crude_oil_price():
         end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))
 
         # Try cache first
-        cached = load_data_from_datasets(data_id, 'finmind_crude_oil_price', start_date, end_date)
+        cached = load_data_from_cache(data_id, 'finmind_crude_oil_price', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1276,8 +1276,8 @@ def get_finmind_crude_oil_price():
         data = resp.json()
         response_data = data.get('data', [])
 
-        # Save to datasets for caching/analysis
-        save_data_to_datasets(data_id, response_data, 'finmind_crude_oil_price', start_date, end_date)
+        # Save to cache for caching/analysis
+        save_data_to_cache(data_id, response_data, 'finmind_crude_oil_price', start_date, end_date)
 
         return jsonify(response_data)
     except requests.HTTPError as he:
@@ -1306,7 +1306,7 @@ def get_finmind_us_stock(stock_id: str):
         end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))
 
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_us_stock', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_us_stock', start_date, end_date)
         if cached is not None:
             # Use 'Close' column for plotting if present, otherwise try lowercase 'close'
             prices = [d.get('Close') if 'Close' in d else d.get('close') for d in cached]
@@ -1330,7 +1330,7 @@ def get_finmind_us_stock(stock_id: str):
         # Use 'Close' column for plotting if present, otherwise try lowercase 'close'
         prices = [d.get('Close') if 'Close' in d else d.get('close') for d in response_data]
         chart_image_base64 = generate_stock_chart([d['date'] for d in response_data], prices, stock_id)
-        save_data_to_datasets(stock_id, response_data, 'finmind_us_stock', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_us_stock', start_date, end_date)
 
         return jsonify({'data': response_data, 'chart_image': chart_image_base64})
     except Exception as e:
@@ -1361,7 +1361,7 @@ def get_finmind_exchange_rate():
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-        cached = load_data_from_datasets('exchange_rate', 'finmind_exchange_rate', start_date, end_date)
+        cached = load_data_from_cache('exchange_rate', 'finmind_exchange_rate', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1371,7 +1371,7 @@ def get_finmind_exchange_rate():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('exchange_rate', response_data, 'finmind_exchange_rate', start_date, end_date)
+        save_data_to_cache('exchange_rate', response_data, 'finmind_exchange_rate', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1399,13 +1399,13 @@ def get_finmind_central_bank_rate():
         api = DataLoader()
         api.login_by_token(api_token=api_key)
 
-        cached = load_data_from_datasets('central_bank_rate', 'finmind_central_bank_rate')
+        cached = load_data_from_cache('central_bank_rate', 'finmind_central_bank_rate')
         if cached is not None:
             return jsonify(cached)
 
         df = api.central_bank_interest_rate()
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('central_bank_rate', response_data, 'finmind_central_bank_rate')
+        save_data_to_cache('central_bank_rate', response_data, 'finmind_central_bank_rate')
 
         return jsonify(response_data)
     except Exception as e:
@@ -1436,7 +1436,7 @@ def get_finmind_us_treasury_yield():
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-        cached = load_data_from_datasets('us_treasury', 'finmind_us_treasury_yield', start_date, end_date)
+        cached = load_data_from_cache('us_treasury', 'finmind_us_treasury_yield', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1446,7 +1446,7 @@ def get_finmind_us_treasury_yield():
         )
 
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets('us_treasury', response_data, 'finmind_us_treasury_yield', start_date, end_date)
+        save_data_to_cache('us_treasury', response_data, 'finmind_us_treasury_yield', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1464,7 +1464,7 @@ def get_finmind_data(stock_id):
         end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))
 
         # Try to load from cache first (exact start/end match)
-        cached = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
         if cached is not None:
             df = pd.DataFrame(cached) if isinstance(cached, list) else pd.DataFrame(cached)
             chart_image_base64 = generate_kline_chart(df, stock_id, f"{stock_id} K線圖")
@@ -1489,8 +1489,8 @@ def get_finmind_data(stock_id):
         # Generate K-line chart
         chart_image_base64 = generate_kline_chart(df, stock_id, f"{stock_id} K線圖")
 
-        # Save to datasets
-        save_data_to_datasets(stock_id, response_data, 'finmind_taiwan_stock_price', start_date, end_date)
+        # Save to cache
+        save_data_to_cache(stock_id, response_data, 'finmind_taiwan_stock_price', start_date, end_date)
 
         return jsonify({'data': response_data, 'chart_image': chart_image_base64})
     except Exception as e:
@@ -1510,7 +1510,7 @@ def get_finmind_per_data(stock_id):
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         
-        cached = load_data_from_datasets(stock_id, 'finmind_per_pbr', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_per_pbr', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1521,7 +1521,7 @@ def get_finmind_per_data(stock_id):
         )
         
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_per_pbr', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_per_pbr', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1541,7 +1541,7 @@ def get_finmind_institutional_data(stock_id):
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
         
-        cached = load_data_from_datasets(stock_id, 'finmind_institutional', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_institutional', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1552,7 +1552,7 @@ def get_finmind_institutional_data(stock_id):
         )
         
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_institutional', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_institutional', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1572,7 +1572,7 @@ def get_finmind_margin_data(stock_id):
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
         
-        cached = load_data_from_datasets(stock_id, 'finmind_margin', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_margin', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1583,7 +1583,7 @@ def get_finmind_margin_data(stock_id):
         )
         
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_margin', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_margin', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1603,7 +1603,7 @@ def get_finmind_revenue_data(stock_id):
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
         
-        cached = load_data_from_datasets(stock_id, 'finmind_revenue', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_revenue', start_date, end_date)
         if cached is not None:
             return jsonify(cached)
 
@@ -1613,7 +1613,7 @@ def get_finmind_revenue_data(stock_id):
         )
         
         response_data = df.to_dict(orient='records')
-        save_data_to_datasets(stock_id, response_data, 'finmind_revenue', start_date, end_date)
+        save_data_to_cache(stock_id, response_data, 'finmind_revenue', start_date, end_date)
 
         return jsonify(response_data)
     except Exception as e:
@@ -1700,7 +1700,7 @@ def get_finmind_weekly_data(stock_id):
         weekly_df = weekly_df.rename(columns=column_mapping)
 
         # Try cache first
-        cached = load_data_from_datasets(stock_id, 'finmind_weekly', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_weekly', start_date, end_date)
         if cached is not None:
             df_cached = pd.DataFrame(cached)
             chart_image_base64 = generate_kline_chart(df_cached, stock_id, f"{stock_id} 週線K線圖")
@@ -1711,8 +1711,8 @@ def get_finmind_weekly_data(stock_id):
         # Generate K-line chart
         chart_image_base64 = generate_kline_chart(weekly_df, stock_id, f"{stock_id} 週線K線圖")
 
-        # Save to datasets
-        save_data_to_datasets(stock_id, response_data, 'finmind_weekly', start_date, end_date)
+        # Save to cache
+        save_data_to_cache(stock_id, response_data, 'finmind_weekly', start_date, end_date)
 
         return jsonify({'data': response_data, 'chart_image': chart_image_base64})
     except Exception as e:
@@ -1798,7 +1798,7 @@ def get_finmind_monthly_data(stock_id):
         }
         monthly_df = monthly_df.rename(columns=column_mapping)
 
-        cached = load_data_from_datasets(stock_id, 'finmind_monthly', start_date, end_date)
+        cached = load_data_from_cache(stock_id, 'finmind_monthly', start_date, end_date)
         if cached is not None:
             df_cached = pd.DataFrame(cached)
             chart_image_base64 = generate_kline_chart(df_cached, stock_id, f"{stock_id} 月線K線圖")
@@ -1809,8 +1809,8 @@ def get_finmind_monthly_data(stock_id):
         # Generate K-line chart
         chart_image_base64 = generate_kline_chart(monthly_df, stock_id, f"{stock_id} 月線K線圖")
 
-        # Save to datasets
-        save_data_to_datasets(stock_id, response_data, 'finmind_monthly', start_date, end_date)
+        # Save to cache
+        save_data_to_cache(stock_id, response_data, 'finmind_monthly', start_date, end_date)
 
         return jsonify({'data': response_data, 'chart_image': chart_image_base64})
     except Exception as e:
@@ -1851,7 +1851,7 @@ def get_translation(dataset):
     }
 
     # Try cache first (allow returning cached translations without API key)
-    cached = load_data_from_datasets(dataset, 'finmind_translation')
+    cached = load_data_from_cache(dataset, 'finmind_translation')
     
     token = os.getenv('FINMIND_API_KEY')
     
@@ -1869,12 +1869,12 @@ def get_translation(dataset):
             data = resp.json()
             # Check if the response contains translation data
             if 'data' in data and isinstance(data['data'], dict):
-                save_data_to_datasets(dataset, data['data'], 'finmind_translation')
+                save_data_to_cache(dataset, data['data'], 'finmind_translation')
                 result_map = data['data']
             elif 'detail' in data:
                 result_map = {}
             elif isinstance(data, dict):
-                save_data_to_datasets(dataset, data, 'finmind_translation')
+                save_data_to_cache(dataset, data, 'finmind_translation')
                 result_map = data
         except Exception:
             result_map = {}
@@ -1892,7 +1892,7 @@ def get_user_info():
     """Get FinMind API usage info (user_count and api_request_limit).
 
     This endpoint returns real-time usage info from the FinMind web API.
-    It does NOT use cached data and does NOT save responses to the datasets
+    It does NOT use cached data and does NOT save responses to the cache
     directory.
     """
     token = os.getenv('FINMIND_API_KEY')
@@ -1943,14 +1943,14 @@ def finmind_dashboard() -> str:
         end_date: str = request.form.get('end_date')
         
         # Fetch price data
-        price_data = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
+        price_data = load_data_from_cache(stock_id, 'finmind_taiwan_stock_price', start_date, end_date)
         if price_data is None:
             if api:
                 df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 # Rename columns to match chart expectations
                 df.rename(columns={'max': 'high', 'min': 'low', 'Trading_Volume': 'volume'}, inplace=True)
                 price_data = df.to_dict(orient='records')
-                save_data_to_datasets(stock_id, price_data, 'finmind_taiwan_stock_price', start_date, end_date)
+                save_data_to_cache(stock_id, price_data, 'finmind_taiwan_stock_price', start_date, end_date)
         else:
             # If loaded from cache, ensure columns are renamed
             df = pd.DataFrame(price_data)
@@ -1958,32 +1958,32 @@ def finmind_dashboard() -> str:
             price_data = df.to_dict(orient='records')
         
         # Fetch institutional data
-        institutional_data = load_data_from_datasets(stock_id, 'finmind_institutional', start_date, end_date)
+        institutional_data = load_data_from_cache(stock_id, 'finmind_institutional', start_date, end_date)
         if institutional_data is None:
             if api:
                 df = api.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 institutional_data = df.to_dict(orient='records')
-                save_data_to_datasets(stock_id, institutional_data, 'finmind_institutional', start_date, end_date)
+                save_data_to_cache(stock_id, institutional_data, 'finmind_institutional', start_date, end_date)
         
         # Fetch margin data
-        margin_data = load_data_from_datasets(stock_id, 'finmind_margin', start_date, end_date)
+        margin_data = load_data_from_cache(stock_id, 'finmind_margin', start_date, end_date)
         if margin_data is None:
             if api:
                 df = api.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=end_date)
                 margin_data = df.to_dict(orient='records')
-                save_data_to_datasets(stock_id, margin_data, 'finmind_margin', start_date, end_date)
+                save_data_to_cache(stock_id, margin_data, 'finmind_margin', start_date, end_date)
 
         # Fetch monthly revenue data
-        revenue_data = load_data_from_datasets(stock_id, 'finmind_revenue', start_date, end_date)
+        revenue_data = load_data_from_cache(stock_id, 'finmind_revenue', start_date, end_date)
         if revenue_data is None:
             if api:
                 df = api.taiwan_stock_month_revenue(stock_id=stock_id, start_date=start_date)
                 revenue_data = df.to_dict(orient='records')
-                save_data_to_datasets(stock_id, revenue_data, 'finmind_revenue', start_date, end_date)
+                save_data_to_cache(stock_id, revenue_data, 'finmind_revenue', start_date, end_date)
 
         # Fetch financial statement (EPS, Gross Profit)
         # Use a broader start_date for financials if possible (defaulting to input start_date)
-        financial_data = load_data_from_datasets(stock_id, 'finmind_financial_statement', start_date)
+        financial_data = load_data_from_cache(stock_id, 'finmind_financial_statement', start_date)
         if financial_data is None and api:
             try:
                 # Per FinMind tutor, financial statements often need a 2019 baseline or similar
@@ -2041,7 +2041,7 @@ def finmind_dashboard() -> str:
                     })
 
                 # Save daily sequential financial data to cache
-                save_data_to_datasets(stock_id, financial_daily, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
+                save_data_to_cache(stock_id, financial_daily, 'finmind_financial_statement', start_date=start_date, end_date=end_date)
         except Exception:
             financial_daily = []
 
@@ -2065,7 +2065,7 @@ def finmind_dashboard() -> str:
 
 @bp.route('/api/finmind/save_dashboard', methods=['POST'])
 def save_dashboard():
-    """Save combined datasets (JSON + CSV) for the dashboard's selected stock/date-range.
+    """Save combined cached data (JSON + CSV) for the dashboard's selected stock/date-range.
 
     Payload: { stock_id, start_date, end_date, force_refresh (optional bool) }
     """
@@ -2113,14 +2113,14 @@ def save_dashboard():
                 'saved_by': 'user:web',
                 'api_names': api_names
             },
-            'datasets': {}
+            'cache': {}
         }
 
         results = {}
         for api_name in api_names:
             data = None
             if not force_refresh:
-                data = load_data_from_datasets(stock_id, api_name, start_date, end_date)
+                data = load_data_from_cache(stock_id, api_name, start_date, end_date)
             source = 'cache' if data is not None else None
 
             if data is None:
@@ -2143,18 +2143,18 @@ def save_dashboard():
 
                     data = df.to_dict(orient='records')
                     if api_name != 'finmind_financial_statement':
-                        save_data_to_datasets(stock_id, data, api_name, start_date, end_date)
+                        save_data_to_cache(stock_id, data, api_name, start_date, end_date)
                     source = 'finmind'
                 except Exception as e:
                     results[api_name] = {'ok': False, 'error': str(e)}
                     continue
 
-            combined['datasets'][api_name] = {'source': source or 'cache', 'cached': source == 'cache', 'records': data}
+            combined['cache'][api_name] = {'source': source or 'cache', 'cached': source == 'cache', 'records': data}
             results[api_name] = {'ok': True}
 
         # Derive monthly aggregates for revenue (cc. generate_plotly_kline_chart)
         try:
-            revenue_ds = combined['datasets'].get('finmind_revenue', {})
+            revenue_ds = combined['cache'].get('finmind_revenue', {})
             rev_records = revenue_ds.get('records') or []
             if rev_records:
                 df_rev = pd.DataFrame(rev_records)
@@ -2164,7 +2164,7 @@ def save_dashboard():
                     df_rev['date'] = pd.to_datetime(df_rev['date'])
                     df_rev['year_month'] = df_rev['date'].dt.to_period('M')
 
-                df_price = load_data_from_datasets(stock_id, 'finmind_taiwan_stock_price', start_date, end_date) or []
+                df_price = load_data_from_cache(stock_id, 'finmind_taiwan_stock_price', start_date, end_date) or []
                 df_price = pd.DataFrame(df_price)
                 if not df_price.empty:
                     df_price['date'] = pd.to_datetime(df_price['date'])
@@ -2174,6 +2174,7 @@ def save_dashboard():
                     td = pd.DataFrame(columns=['year_month', 'trading_days'])
 
                 if 'revenue' in df_rev.columns:
+                    # Group revenue by month (sum in case multiple entries per month)
                     df_rev_grouped = df_rev.groupby('year_month', as_index=False).agg({'revenue': 'sum'})
                     df_rev_grouped = pd.merge(df_rev_grouped, td, on='year_month', how='left')
                     df_rev_grouped['est_flag'] = df_rev_grouped['trading_days'].isna()
@@ -2189,15 +2190,15 @@ def save_dashboard():
                             'avg_per_trading_day': float(r['avg_per_trading_day']) if not pd.isna(r['avg_per_trading_day']) else None
                         })
 
-                    combined['datasets'].setdefault('finmind_revenue', {})['derived'] = {'monthly_aggregates': monthly}
+                    combined['cache'].setdefault('finmind_revenue', {})['derived'] = {'monthly_aggregates': monthly}
         except Exception:
             pass
 
         # Build backward-filled daily financial series (EPS: seasonal; GrossProfit: absolute)
         try:
-            fin_ds = combined['datasets'].get('finmind_financial_statement', {})
+            fin_ds = combined['cache'].get('finmind_financial_statement', {})
             fin_records = fin_ds.get('records') or []
-            price_ds = combined['datasets'].get('finmind_taiwan_stock_price', {})
+            price_ds = combined['cache'].get('finmind_taiwan_stock_price', {})
             price_records = price_ds.get('records') or []
             if fin_records and price_records:
                 df_fin = pd.DataFrame(fin_records)
@@ -2232,9 +2233,9 @@ def save_dashboard():
                     rec['gross_profit'] = float(row.get(gross_col)) if gross_col and not pd.isna(row.get(gross_col)) else None
                     daily.append(rec)
 
-                combined['datasets'].setdefault('finmind_financial_statement', {}).setdefault('derived', {})['daily_financial_series'] = daily
+                combined['cache'].setdefault('finmind_financial_statement', {}).setdefault('derived', {})['daily_financial_series'] = daily
                 # Save processed daily financial series to its own dataset cache
-                save_data_to_datasets(stock_id, daily, 'finmind_financial_statement', start_date, end_date)
+                save_data_to_cache(stock_id, daily, 'finmind_financial_statement', start_date, end_date)
         except Exception:
             pass
 

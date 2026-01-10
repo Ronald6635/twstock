@@ -5,16 +5,25 @@ This module provides functions for visualizing stock data using various charts a
 
 It includes interactive Plotly charts for K-line analysis with institutional and margin data overlays.
 
+Key features:
+- Loads and prepares preprocessed stock data
+- Generates auxiliary Plotly figures with multiple subplots
+- Creates HTML dashboards with embedded data
+
+Architecture notes:
+- Supports flexible data formats (list, dict, nested structures)
+- Handles missing data gracefully
+- Outputs self-contained HTML files
 """
 
 import json
 import os
 import sys
+from typing import Dict, List, Tuple, Any, Optional
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.graph_objects as go  # for consistency with chart generation (safe to import)
 import re  # used to decode unicode escape sequences in Plotly HTML
 
 # Try importing from app, with a fallback to add project root to sys.path so the script can be run directly
@@ -40,21 +49,25 @@ except (ImportError, ModuleNotFoundError):
         )
 
 
-def load_json_data(file_path: str) -> dict:
+def load_json_data(file_path: str) -> Dict[str, Any]:
     """
     Load data from a JSON file.
-    
+
     Args:
-        file_path (str): Path to the JSON file.
-        
+        file_path: Path to the JSON file to load.
+
     Returns:
-        dict: Loaded data.
+        Dictionary containing the loaded JSON data.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        json.JSONDecodeError: If the file contains invalid JSON.
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def prepare_data_for_chart(preprocessed_data: dict) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+def prepare_data_for_chart(preprocessed_data: Dict[str, Any] | List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Prepare preprocessed data for the chart function.
 
@@ -66,10 +79,10 @@ def prepare_data_for_chart(preprocessed_data: dict) -> tuple[list[dict], list[di
     It also tries to be tolerant of different column name casing.
 
     Args:
-        preprocessed_data (dict | list): Preprocessed data.
+        preprocessed_data: Preprocessed data in various formats.
 
     Returns:
-        tuple: (price_data, institutional_data, margin_data, revenue_data)
+        Tuple of (price_data, institutional_data, margin_data, revenue_data) lists.
     """
     price_data: list[dict] = []
     institutional_data: list[dict] = []
@@ -308,13 +321,15 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
     # Row 9: EPS
     if not df_rec.empty and 'eps' in df_rec.columns:
         eps_vals = pd.to_numeric(df_rec['eps'], errors='coerce')
+        # Color markers red for positive EPS and green for negative EPS
+        eps_marker_colors = ['#FF3232' if v > 0 else '#00AB5E' for v in eps_vals.fillna(0)]
         aux_fig.add_trace(go.Scatter(
             x=df_rec['date'],
             y=eps_vals,
             mode='lines+markers',
-            marker=dict(size=4),
+            marker=dict(size=4, color=eps_marker_colors),
             name='EPS',
-            line=dict(width=2, color='#1f77b4'),
+            line=dict(width=2, color='rgba(31,119,180,0.5)'),
             hovertemplate='EPS: %{y:.2f}<extra></extra>'
         ), row=9, col=1)
 
@@ -323,10 +338,12 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
         gp_vals = pd.to_numeric(df_rec['gross_profit'], errors='coerce').fillna(0)
         # Scale to 100M for readability
         gp_scaled = gp_vals / 1e8
+        # Color bars red for positive gross profit, green for negative
+        gp_colors = ['#FF3232' if v > 0 else '#00AB5E' for v in gp_scaled]
         aux_fig.add_trace(go.Bar(
             x=df_rec['date'],
             y=gp_scaled,
-            marker_color='#ff7f0e',
+            marker_color=gp_colors,
             opacity=0.7,
             name='Gross Profit (100M)',
             hovertemplate='Gross Profit: %{y:.2f} 100M<extra></extra>'

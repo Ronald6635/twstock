@@ -103,6 +103,7 @@ ENV/
 \#.*\#
 *.\#
 docs/reference/
-datasets/
-engine/datasets_ml/*/*.json
-engine/datasets_ml/*/*.csv
+cache/
+engine/datasets/*/*.json
+engine/datasets/*/*.csv
+engine/datasets/*/*.html

@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 import twstock
-from .utils import save_data_to_datasets
+from .utils import save_data_to_cache
 
 bp = Blueprint('realtime', __name__)
 
@@ -13,8 +13,8 @@ def get_realtime_data(stock_id):
         
         response_data = realtime
 
-        # Save to datasets
-        save_data_to_datasets(stock_id, response_data, 'realtime')
+        # Save to cache
+        save_data_to_cache(stock_id, response_data, 'realtime')
 
         return jsonify(response_data)
     except Exception as e:

@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 import twstock
-from .utils import save_data_to_datasets
+from .utils import save_data_to_cache
 
 bp = Blueprint('analytics', __name__)
 
@@ -19,8 +19,8 @@ def get_analytics_data(stock_id):
             'recommendation': best_four_point
         }
 
-        # Save to datasets
-        save_data_to_datasets(stock_id, response_data, 'analytics')
+        # Save to cache
+        save_data_to_cache(stock_id, response_data, 'analytics')
 
         return jsonify(response_data)
     except Exception as e:

@@ -3,7 +3,7 @@ import twstock
 import json
 import os
 from datetime import datetime
-from .utils import generate_stock_chart, safe_float, safe_int, save_data_to_datasets
+from .utils import generate_stock_chart, safe_float, safe_int, save_data_to_cache
 
 bp = Blueprint('stock', __name__)
 
@@ -68,10 +68,10 @@ def get_stock_data(stock_id):
             'prices': prices
         }
 
-        # Save to datasets (exclude chart_image to avoid large files)
+        # Save to cache (exclude chart_image to avoid large files)
         data_to_save = response_data.copy()
         data_to_save.pop('chart_image', None)
-        save_data_to_datasets(stock_id, data_to_save, 'stock')
+        save_data_to_cache(stock_id, data_to_save, 'stock')
 
         return jsonify(response_data)
 

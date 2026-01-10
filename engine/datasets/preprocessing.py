@@ -1,15 +1,100 @@
+"""
+Preprocessing Module for FinMind Datasets
+
+This module provides functions to preprocess combined FinMind datasets into
+merged daily JSON and CSV files for analysis and visualization.
+
+Key features:
+- Merges multiple dataset types into daily records
+- Handles institutional, margin, revenue, and financial data
+- Filters data to trading dates
+- Outputs structured JSON and CSV formats
+
+Architecture notes:
+- Supports backward compatibility with old 'datasets' key
+- Transforms institutional data into net buy/sell figures
+- Derives daily revenue from monthly aggregates
+- Computes margin balance changes
+"""
+
 import json
 import pandas as pd
 import os
 from datetime import datetime
 from collections import defaultdict
+from typing import Dict, List, Any
 
-def preprocess_data(input_file, output_json, output_csv):
+
+def preprocess_data(input_file: str, output_json: str, output_csv: str) -> None:
+    """
+    Preprocess combined FinMind datasets into merged daily records.
+
+    Loads combined JSON data, filters to trading dates, transforms institutional
+    and margin data, derives daily revenue, and outputs merged JSON and CSV files.
+
+    Args:
+        input_file: Path to the combined input JSON file
+        output_json: Path for the output JSON file
+        output_csv: Path for the output CSV file
+
+    Returns:
+        None
+
+    Raises:
+        KeyError: If input JSON lacks required 'cache' or 'datasets' key
+        FileNotFoundError: If input file does not exist
+    """
+    # Load JSON data
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    # Support both 'cache' (new) and 'datasets' (old) keys for backward compatibility
+    datasets = data.get('cache', data.get('datasets'))
+    if datasets is None:
+        raise KeyError("Input JSON must contain 'cache' or 'datasets' key")
+
+    # Get trading dates from finmind_taiwan_stock_price
+    trading_dates = set()
+    for record in datasets['finmind_taiwan_stock_price']['records']:
+        trading_dates.add(record['date'])
+    trading_dates = sorted(trading_dates)
+
+    # Filter all datasets to trading dates
+    filtered_datasets = {}
+    for key, value in datasets.items():
+        if 'records' in value:
+            if key == 'finmind_revenue':
+                # Revenue is monthly, keep all
+                filtered_records = value['records']
+            else:
+                filtered_records = [r for r in value['records'] if r['date'] in trading_dates]
+            filtered_datasets[key] = {'source': value.get('source'), 'cached': value.get('cached'), 'records': filtered_records}
+
+    # Transform finmind_institutional
+    institutional_by_date = defaultdict(list)
+    for record in filtered_datasets['finmind_institutional']['records']:
+        institutional_by_date[record['date']].append(record)
+
+    # Index price records by date so OHLC and volume can be merged into final output
+    price_by_date = {}
+    for record in filtered_datasets.get('finmind_taiwan_stock_price', {}).get('records', []):
+        # normalize keys (some datasets use different casing)
+        date = record.get('date') or record.get('Date')
+        if not date:
+            continue
+        price_by_date[date] = record
+
+    institutional_transformed = {}
+    for date, records in institutional_by_date.items():
+        nets = {}
     # Load JSON data
     with open(input_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    datasets = data['datasets']
+    # Support both 'cache' (new) and 'datasets' (old) keys for backward compatibility
+    datasets = data.get('cache', data.get('datasets'))
+    if datasets is None:
+        raise KeyError("Input JSON must contain 'cache' or 'datasets' key")
     
     # Get trading dates from finmind_taiwan_stock_price
     trading_dates = set()
@@ -152,8 +237,49 @@ def preprocess_data(input_file, output_json, output_csv):
     df.to_csv(output_csv, index=False)
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_file = os.path.join(base_dir, "中華化-1727", "combined_2025-01-01_2026-01-09_20260109T044505Z.json")
-    output_json = os.path.join(base_dir, "preprocessed_1727.json")
-    output_csv = os.path.join(base_dir, "preprocessed_1727.csv")
+    """
+    Command-line interface for preprocessing datasets.
+
+    Parses arguments and calls preprocess_data with appropriate paths.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Preprocess finmind datasets into merged daily JSON/CSV files"
+    )
+    parser.add_argument(
+        "input_file",
+        help="Path to the combined input JSON file (e.g. ./華泰-2329/combined_...json)"
+    )
+    parser.add_argument(
+        "--out-json",
+        help="Output JSON path. Defaults to parent directory as preprocessed_<folder>.json",
+        default=None,
+    )
+    parser.add_argument(
+        "--out-csv",
+        help="Output CSV path. Defaults to parent directory as preprocessed_<folder>.csv",
+        default=None,
+    )
+
+    args = parser.parse_args()
+    input_file = os.path.abspath(args.input_file)
+    parent_dir = os.path.dirname(input_file)
+    parent_name = os.path.basename(parent_dir) or "output"
+
+    if args.out_json:
+        output_json = args.out_json
+    else:
+        output_json = os.path.join(parent_dir, f"preprocessed_{parent_name}.json")
+
+    if args.out_csv:
+        output_csv = args.out_csv
+    else:
+        output_csv = os.path.join(parent_dir, f"preprocessed_{parent_name}.csv")
+
+    print(f"Input: {input_file}")
+    print(f"Writing outputs: {output_json}, {output_csv}")
+
     preprocess_data(input_file, output_json, output_csv)
+
+    print("Done.")

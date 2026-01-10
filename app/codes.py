@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 import twstock
-from .utils import save_data_to_datasets
+from .utils import save_data_to_cache
 
 bp = Blueprint('codes', __name__)
 
@@ -12,7 +12,7 @@ def get_codes_data():
 
         # Save to datasets (generic, since no stock_id)
         # For codes, save as general data
-        save_data_to_datasets('all', response_data, 'codes')
+        save_data_to_cache('all', response_data, 'codes')
 
         return jsonify(response_data)
     except Exception as e:
