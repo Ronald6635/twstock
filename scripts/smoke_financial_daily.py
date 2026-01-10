@@ -3,7 +3,7 @@ import json
 import pandas as pd
 import os
 
-folder = 'datasets/聯詠-3034'
+folder = 'cache/聯詠-3034'
 fin_path = os.path.join(folder, '2019-01-01_2025-09-30_finmind_financial_statement.json')
 print('financial file exists?', os.path.exists(fin_path))
 price_files = glob.glob(os.path.join(folder, '*_finmind_taiwan_stock_price.json'))

@@ -6,7 +6,7 @@ from app import app as flask_app
 
 def write_dataset(folder_name, filename, data):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', folder_name)
+    folder = os.path.join(project_root, 'cache', folder_name)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, filename)
     with open(path, 'w', encoding='utf-8') as f:
@@ -21,7 +21,7 @@ def test_save_with_cached_data(monkeypatch, tmp_path):
     end = '2025-01-07'
     stock = '9999'
 
-    # Prepare sample datasets
+    # Prepare sample cache
     price = [
         {'date': '2025-01-02', 'open': 100, 'high': 110, 'low': 90, 'close': 105, 'volume': 1000}
     ]
@@ -60,16 +60,16 @@ def test_save_with_cached_data(monkeypatch, tmp_path):
     # Combined JSON should contain the revenue dataset and derived field
     with open(files[0], 'r', encoding='utf-8') as f:
         combined = json.load(f)
-    assert 'datasets' in combined
-    assert 'finmind_revenue' in combined['datasets']
-    assert 'derived' in combined['datasets']['finmind_revenue']
+    assert 'cache' in combined
+    assert 'finmind_revenue' in combined['cache']
+    assert 'derived' in combined['cache']['finmind_revenue']
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # remove created datasets folder
-    shutil.rmtree(os.path.join(project_root, 'datasets', folder_name))
-    # remove engine datasets_ml folder for this company-stock
-    shutil.rmtree(os.path.join(project_root, 'engine', 'datasets_ml', f"{company_name}-{stock}"))
+    # remove created cache folder
+    shutil.rmtree(os.path.join(project_root, 'cache', folder_name))
+    # remove engine datasets folder for this company-stock
+    shutil.rmtree(os.path.join(project_root, 'engine', 'datasets', f"{company_name}-{stock}"))
 
 
 def test_missing_params_returns_400():

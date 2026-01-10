@@ -6,7 +6,7 @@ from app import app as flask_app
 
 def write_dataset(folder_name, filename, data):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', folder_name)
+    folder = os.path.join(project_root, 'cache', folder_name)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, filename)
     with open(path, 'w', encoding='utf-8') as f:
@@ -29,7 +29,7 @@ def test_stock_info_cached(monkeypatch):
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    shutil.rmtree(os.path.join(project_root, 'datasets', 'all-all'))
+    shutil.rmtree(os.path.join(project_root, 'cache', 'all-all'))
 
 
 def test_daily_cached(monkeypatch):
@@ -42,7 +42,7 @@ def test_daily_cached(monkeypatch):
         {'date': '2024-01-01', 'open': 100, 'high': 110, 'low': 90, 'close': 105, 'volume': 1000},
         {'date': '2024-01-02', 'open': 106, 'high': 112, 'low': 102, 'close': 110, 'volume': 1200},
     ]
-    # Ensure we write the file to the folder load_data_from_datasets expects
+    # Ensure we write the file to the folder load_data_from_cache expects
     import twstock
     code_info = twstock.codes.get(stock)
     company_name = code_info.name if code_info else stock
@@ -50,8 +50,8 @@ def test_daily_cached(monkeypatch):
     path = write_dataset(folder_name, f'{start}_{end}_finmind_taiwan_stock_price.json', data)
     assert os.path.exists(path)
 
-    from app.utils import load_data_from_datasets
-    direct = load_data_from_datasets(stock, 'finmind_taiwan_stock_price', start, end)
+    from app.utils import load_data_from_cache
+    direct = load_data_from_cache(stock, 'finmind_taiwan_stock_price', start, end)
     print('DIRECT LOAD:', direct)
 
     client = flask_app.test_client()
@@ -66,7 +66,7 @@ def test_daily_cached(monkeypatch):
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    shutil.rmtree(os.path.join(project_root, 'datasets', f'{stock}-{stock}'))
+    shutil.rmtree(os.path.join(project_root, 'cache', f'{stock}-{stock}'))
 
 
 def test_gold_cached(monkeypatch):
@@ -84,7 +84,7 @@ def test_gold_cached(monkeypatch):
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    shutil.rmtree(os.path.join(project_root, 'datasets', 'gold-gold'))
+    shutil.rmtree(os.path.join(project_root, 'cache', 'gold-gold'))
 
 
 def test_crude_cached(monkeypatch):
@@ -103,7 +103,7 @@ def test_crude_cached(monkeypatch):
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    shutil.rmtree(os.path.join(project_root, 'datasets', f'{data_id}-{data_id}'))
+    shutil.rmtree(os.path.join(project_root, 'cache', f'{data_id}-{data_id}'))
 
 
 def test_translation_cached(monkeypatch):
@@ -121,4 +121,4 @@ def test_translation_cached(monkeypatch):
 
     # Cleanup
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    shutil.rmtree(os.path.join(project_root, 'datasets', f'{dataset}-{dataset}'))
+    shutil.rmtree(os.path.join(project_root, 'cache', f'{dataset}-{dataset}'))

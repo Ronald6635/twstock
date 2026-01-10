@@ -2,7 +2,7 @@ import os, sys, json
 # allow running from scripts/ by adding project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.utils import write_combined_files
-from app.finmind import load_data_from_datasets
+from app.finmind import load_data_from_cache
 import twstock
 
 stock_id = '3034'
@@ -21,18 +21,18 @@ combined = {
         'saved_by': 'test',
         'api_names': []
     },
-    'datasets': {}
+    'cache': {}
 }
 
 for api_name in ['finmind_taiwan_stock_price','finmind_financial_statement']:
-    recs = load_data_from_datasets(stock_id, api_name, start_date, end_date) or []
-    combined['datasets'][api_name] = {'source': 'cache', 'cached': True, 'records': recs}
+    recs = load_data_from_cache(stock_id, api_name, start_date, end_date) or []
+    combined['cache'][api_name] = {'source': 'cache', 'cached': True, 'records': recs}
 
 # run the derived daily generation code (simplified)
 from datetime import datetime
 import pandas as pd
-fin_records = combined['datasets'].get('finmind_financial_statement', {}).get('records') or []
-price_records = combined['datasets'].get('finmind_taiwan_stock_price', {}).get('records') or []
+fin_records = combined['cache'].get('finmind_financial_statement', {}).get('records') or []
+price_records = combined['cache'].get('finmind_taiwan_stock_price', {}).get('records') or []
 if fin_records and price_records:
     df_fin = pd.DataFrame(fin_records)
     if 'type' in df_fin.columns and 'value' in df_fin.columns:
@@ -59,7 +59,7 @@ if fin_records and price_records:
         rec['eps']=float(row.get(eps_col)) if eps_col and not pd.isna(row.get(eps_col)) else None
         rec['gross_profit']=float(row.get(gross_col)) if gross_col and not pd.isna(row.get(gross_col)) else None
         daily.append(rec)
-    combined['datasets'].setdefault('finmind_financial_statement', {}).setdefault('derived', {})['daily_financial_series']=daily
+    combined['cache'].setdefault('finmind_financial_statement', {}).setdefault('derived', {})['daily_financial_series']=daily
 
 files = write_combined_files(company, stock_id, start_date, end_date, combined)
 print('wrote', files)

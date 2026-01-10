@@ -3,13 +3,13 @@ import json
 
 import pytest
 
-from engine.datasets_ml.data_visual import prepare_data_for_chart, load_json_data
+from engine.datasets.data_visual import prepare_data_for_chart, load_json_data
 
 
 def test_prepare_data_for_chart_prefers_price_volume():
     # Load the real preprocessed file and verify price_data volumes match the file
     here = os.path.dirname(__file__)
-    sample_path = os.path.join(here, '..', 'engine', 'datasets_ml', 'preprocessed_3034.json')
+    sample_path = os.path.join(here, '..', 'engine', 'datasets', 'preprocessed_3034.json')
     sample_path = os.path.normpath(sample_path)
     raw = load_json_data(sample_path)
 
@@ -36,10 +36,10 @@ def test_volume_fallback_to_records():
 def test_build_aux_fig_uses_records_volume():
     """Ensure the Volume bar in the auxiliary figure uses volumes directly from the records DataFrame."""
     import pandas as pd
-    from engine.datasets_ml.data_visual import build_aux_fig
+    from engine.datasets.data_visual import build_aux_fig
 
     here = os.path.dirname(__file__)
-    sample_path = os.path.join(here, '..', 'engine', 'datasets_ml', 'preprocessed_3034.json')
+    sample_path = os.path.join(here, '..', 'engine', 'datasets', 'preprocessed_3034.json')
     sample_path = os.path.normpath(sample_path)
     raw = load_json_data(sample_path)
 

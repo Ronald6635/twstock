@@ -2,7 +2,7 @@ import os, sys, json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.utils import generate_financial_chart
 
-folder = 'datasets/聯詠-3034'
+folder = 'cache/聯詠-3034'
 fin_path = os.path.join(folder, '2019-01-01_2025-09-30_finmind_financial_statement.json')
 price_files = [p for p in os.listdir(folder) if p.endswith('_finmind_taiwan_stock_price.json')]
 price_files.sort()

@@ -1,12 +1,12 @@
 import json
 from pathlib import Path
-from engine.datasets_ml import preprocessing
+from engine.datasets import preprocessing
 
 
 def _get_first_price_record(input_json_path):
     with open(input_json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    recs = data['datasets']['finmind_taiwan_stock_price']['records']
+    recs = data['cache']['finmind_taiwan_stock_price']['records']
     return recs[0], recs
 
 
@@ -18,7 +18,7 @@ def _get_value_from_price(rec, keys):
 
 
 def test_preprocess_merges_price_fields(tmp_path):
-    input_fp = Path('engine/datasets_ml/聯詠-3034/combined_2025-01-01_2026-01-01_20260108T035618Z.json')
+    input_fp = Path('engine/datasets/聯詠-3034/combined_2025-01-01_2026-01-01_20260108T035618Z.json')
     assert input_fp.exists(), f"Input combined file not found: {input_fp}"
 
     out_json = tmp_path / 'preprocessed_test.json'

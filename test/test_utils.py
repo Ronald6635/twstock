@@ -2,7 +2,7 @@ import os
 import shutil
 import json
 import time
-from app.utils import save_data_to_datasets, load_data_from_datasets
+from app.utils import save_data_to_cache, load_data_from_cache
 
 
 def test_save_data_prefix(tmp_path):
@@ -12,11 +12,11 @@ def test_save_data_prefix(tmp_path):
     end_date = '2025-01-31'
     response_data = [{'sample': 1}]
 
-    # Run the function (it writes to datasets/<company>-<stock_id>)
-    save_data_to_datasets(stock_id, response_data, api_name, start_date, end_date)
+    # Run the function (it writes to cache/<company>-<stock_id>)
+    save_data_to_cache(stock_id, response_data, api_name, start_date, end_date)
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', f'{stock_id}-{stock_id}')
+    folder = os.path.join(project_root, 'cache', f'{stock_id}-{stock_id}')
     expected_json = os.path.join(folder, f'{start_date}_{end_date}_{api_name}.json')
     expected_csv = os.path.join(folder, f'{start_date}_{end_date}_{api_name}.csv')
 
@@ -40,7 +40,7 @@ def test_load_data_exact_match(tmp_path):
     data = [{'a': 1}, {'b': 2}]
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', f'{stock_id}-{stock_id}')
+    folder = os.path.join(project_root, 'cache', f'{stock_id}-{stock_id}')
     os.makedirs(folder, exist_ok=True)
 
     target = os.path.join(folder, f'{start_date}_{end_date}_{api_name}.json')
@@ -48,7 +48,7 @@ def test_load_data_exact_match(tmp_path):
         import json
         json.dump(data, f)
 
-    loaded = load_data_from_datasets(stock_id, api_name, start_date, end_date)
+    loaded = load_data_from_cache(stock_id, api_name, start_date, end_date)
     assert loaded == data
 
     # Cleanup
@@ -62,14 +62,14 @@ def test_load_data_corrupt(tmp_path):
     stock_id = '9997'
     api_name = 'finmind_test'
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', f'{stock_id}-{stock_id}')
+    folder = os.path.join(project_root, 'cache', f'{stock_id}-{stock_id}')
     os.makedirs(folder, exist_ok=True)
 
     target = os.path.join(folder, f'2025-03-01_{api_name}.json')
     with open(target, 'w', encoding='utf-8') as f:
         f.write('{ this is not valid json ')
 
-    loaded = load_data_from_datasets(stock_id, api_name)
+    loaded = load_data_from_cache(stock_id, api_name)
     assert loaded is None
 
     # Cleanup

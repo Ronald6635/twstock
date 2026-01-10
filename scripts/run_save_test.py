@@ -6,7 +6,7 @@ from app import app as flask_app
 
 def write_dataset(folder_name, filename, data):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    folder = os.path.join(project_root, 'datasets', folder_name)
+    folder = os.path.join(project_root, 'cache', folder_name)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, filename)
     with open(path, 'w', encoding='utf-8') as f:
@@ -39,10 +39,10 @@ print(resp.get_json())
 # cleanup
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 try:
-    shutil.rmtree(os.path.join(project_root, 'datasets', folder_name))
+    shutil.rmtree(os.path.join(project_root, 'cache', folder_name))
 except Exception:
     pass
 try:
-    shutil.rmtree(os.path.join(project_root, 'engine', 'datasets_ml', f"{company_name}-{stock}"))
+    shutil.rmtree(os.path.join(project_root, 'engine', 'datasets', f"{company_name}-{stock}"))
 except Exception:
     pass
