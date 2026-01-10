@@ -203,9 +203,9 @@ def prepare_analysis_data(
 
     # Correlation among numeric columns of interest
     correlation = pd.DataFrame()
-    corr_cols = [c for c in ('close', 'volume', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
+    corr_cols = [c for c in ('close', 'volume', 'daily_revenue', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
     if corr_cols:
-        corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce').dropna()
+        corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce')
         if not corr_df.empty:
             correlation = corr_df.corr()
 
@@ -272,10 +272,12 @@ if __name__ == '__main__':
         eps_stats = compute_basic_stats(df_rec['eps']) if 'eps' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
         gross_profit_stats = compute_basic_stats(df_rec['gross_profit']) if 'gross_profit' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
 
-        corr_cols = [c for c in ('close', 'volume', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
+        # Correlation among numeric columns of interest
+        # We use pairwise correlation to handle sparse data (like quarterly EPS vs daily price)
+        corr_cols = [c for c in ('close', 'volume', 'daily_revenue', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
         correlation = pd.DataFrame()
         if corr_cols:
-            corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce').dropna()
+            corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce')
             if not corr_df.empty:
                 correlation = corr_df.corr()
 
