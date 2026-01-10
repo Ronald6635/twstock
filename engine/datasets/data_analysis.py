@@ -15,7 +15,6 @@ Key features:
 
 Architecture notes:
 - Depends on data_visual.py for parsing logic
-- Handles missing data gracefully
 - Returns structured results for analysis
 """
 
@@ -103,7 +102,7 @@ def prepare_analysis_data(
 
     This function loads and processes financial data from various sources,
     creating structured DataFrames for analysis and computing basic statistics.
-    It handles missing data gracefully and provides correlation analysis.
+    It provides correlation analysis.
 
     Args:
         raw: Either a path to a JSON file (str), a list of records, or a dict
@@ -121,7 +120,6 @@ def prepare_analysis_data(
             - eps_stats: dict of basic EPS statistics (count, mean, median, etc.)
             - gross_profit_stats: dict of basic gross profit statistics
             - correlation: correlation matrix DataFrame among available numeric columns
-            - missing_dates: list of missing calendar dates (YYYY-MM-DD) between first and last date
 
     Raises:
         FileNotFoundError: If raw is a string path and the file doesn't exist
@@ -140,9 +138,8 @@ def prepare_analysis_data(
         >>> print(results['df_price'].head())
 
     Note:
-        The function normalizes numeric columns and handles missing data.
+        The function normalizes numeric columns.
         Correlation matrix is computed only for available numeric columns.
-        Missing dates are calculated based on calendar days between min and max dates.
     """
     # Load JSON if `raw` is a path
     records: List[dict]
@@ -206,24 +203,11 @@ def prepare_analysis_data(
 
     # Correlation among numeric columns of interest
     correlation = pd.DataFrame()
-    corr_cols = [c for c in ('close', 'eps', 'gross_profit') if c in df_rec.columns]
+    corr_cols = [c for c in ('close', 'volume', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
     if corr_cols:
         corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce').dropna()
         if not corr_df.empty:
             correlation = corr_df.corr()
-
-    # Missing calendar dates between first and last date (for reporting)
-    missing_dates: List[str] = []
-    try:
-        if not df_rec.empty and df_rec['date'].notna().any():
-            dates = pd.to_datetime(df_rec['date']).dt.date
-            start = dates.min()
-            end = dates.max()
-            full_range = pd.date_range(start, end, freq='D')
-            present = {d for d in dates}
-            missing_dates = [d.strftime('%Y-%m-%d') for d in full_range if d.date() not in present]
-    except Exception:
-        missing_dates = []
 
     return {
         'df_price': df_price,
@@ -235,7 +219,6 @@ def prepare_analysis_data(
         'eps_stats': eps_stats,
         'gross_profit_stats': gross_profit_stats,
         'correlation': correlation,
-        'missing_dates': missing_dates,
     }
 
 
@@ -244,6 +227,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Prepare dataframes and stats from a preprocessed JSON file (no charts).')
     parser.add_argument('json_path', nargs='?', default=os.path.join(os.path.dirname(__file__), 'preprocessed_1727.json'), help='Path to preprocessed JSON file')
+    parser.add_argument('--start-date', dest='start_date', help='Filter start date (YYYY-MM-DD)', default=None)
+    parser.add_argument('--end-date', dest='end_date', help='Filter end date (YYYY-MM-DD)', default=None)
     args = parser.parse_args()
 
     try:
@@ -255,6 +240,51 @@ if __name__ == '__main__':
     df_rec = results['df_rec']
     df_price = results['df_price']
 
+    # If user provided date filters, apply them (inclusive)
+    if args.start_date or args.end_date:
+        from datetime import datetime
+        try:
+            s = datetime.strptime(args.start_date, '%Y-%m-%d').date() if args.start_date else None
+            e = datetime.strptime(args.end_date, '%Y-%m-%d').date() if args.end_date else None
+        except ValueError:
+            print('Invalid date format for --start-date or --end-date. Use YYYY-MM-DD.')
+            raise SystemExit(1)
+
+        # Default missing endpoints to available data bounds
+        if s and not e:
+            e = df_rec['date'].max().date() if not df_rec.empty else s
+        if e and not s:
+            s = df_rec['date'].min().date() if not df_rec.empty else e
+
+        # Filter dataframes
+        if not df_rec.empty and 'date' in df_rec.columns:
+            df_rec = df_rec[(df_rec['date'].dt.date >= s) & (df_rec['date'].dt.date <= e)]
+        if not df_price.empty and 'date' in df_price.columns:
+            df_price = df_price[(df_price['date'].dt.date >= s) & (df_price['date'].dt.date <= e)]
+
+        # Recompute basic derived stats from filtered data
+        monthly_daily_revenue_mean = pd.Series(dtype=float)
+        if 'daily_revenue' in df_rec.columns and not df_rec['daily_revenue'].dropna().empty:
+            df_rev = df_rec[['date', 'daily_revenue']].dropna(subset=['date']).copy()
+            df_rev['month'] = df_rev['date'].dt.to_period('M')
+            monthly_daily_revenue_mean = df_rev.groupby('month')['daily_revenue'].mean()
+
+        eps_stats = compute_basic_stats(df_rec['eps']) if 'eps' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
+        gross_profit_stats = compute_basic_stats(df_rec['gross_profit']) if 'gross_profit' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
+
+        corr_cols = [c for c in ('close', 'volume', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
+        correlation = pd.DataFrame()
+        if corr_cols:
+            corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce').dropna()
+            if not corr_df.empty:
+                correlation = corr_df.corr()
+
+        # Update results dict for printing
+        results['monthly_daily_revenue_mean'] = monthly_daily_revenue_mean
+        results['eps_stats'] = eps_stats
+        results['gross_profit_stats'] = gross_profit_stats
+        results['correlation'] = correlation
+
     stock_id = df_rec['stock_id'].iloc[0] if not df_rec.empty and 'stock_id' in df_rec.columns else ''
     start_date = df_rec['date'].min().date() if not df_rec.empty and 'date' in df_rec.columns else None
     end_date = df_rec['date'].max().date() if not df_rec.empty and 'date' in df_rec.columns else None
@@ -262,8 +292,9 @@ if __name__ == '__main__':
     print('\n'+"="*40)
     print('Data Analysis Preparation Results')
     print(f"Prepared data for stock: {stock_id}")
+    print(f"Filtered date range: {start_date} -> {end_date}")
     print(f"Records: {len(df_rec)}, Price rows: {len(df_price)}")
-
+    
     print('\nEPS stats:')
     print(results['eps_stats'])
 
@@ -274,4 +305,5 @@ if __name__ == '__main__':
         print('\nCorrelation matrix:')
         print(results['correlation'])
 
-    print(f"Missing calendar dates between {start_date} and {end_date}: {len(results['missing_dates'])} missing")
+
+    print(f"\n\nFiltered date range: {start_date} -> {end_date}")
