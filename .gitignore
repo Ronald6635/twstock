@@ -130,3 +130,4 @@ engine/datasets/*/*.html
 # GitHub workflows
 .github/
 engine/datasets/best_model.*
+examples/

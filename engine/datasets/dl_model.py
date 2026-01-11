@@ -19,7 +19,7 @@ Architecture notes:
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Sequence
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
@@ -27,7 +27,7 @@ from sklearn.preprocessing import StandardScaler
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
+    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM
     from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
     from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.losses import MeanSquaredError
@@ -39,91 +39,37 @@ except ImportError as e:
     ) from e
 
 
+def create_sequences(data, target, sequence_length=60):
+    """
+    Create sequences for LSTM model.
+    """
+    X, y = [], []
+    for i in range(len(data) - sequence_length):
+        X.append(data[i:(i + sequence_length)])
+        y.append(target[i + sequence_length])
+    return np.array(X), np.array(y)
+
 def models(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    model_config: Optional[Dict[str, Any]] = None
+    model_config: Optional[Dict[str, Any]] = None,
+    use_lstm: bool = True,
+    x_train_idx: Optional[Sequence] = None,
+    x_test_idx: Optional[Sequence] = None,
 ) -> Dict[str, Any]:
     """
     Train and evaluate a deep learning model for stock price prediction.
     
-    This function creates a feedforward neural network using TensorFlow/Keras,
-    trains it on the provided training data, evaluates performance on test data,
-    and generates visualizations comparing predictions to actual values.
-    
-    The model architecture consists of multiple dense layers with dropout and
-    batch normalization for regularization. Early stopping is used to prevent
-    overfitting, and the best model weights are saved during training.
-    
-    Args:
-        X_train: Training feature matrix of shape (n_train_samples, n_features).
-        y_train: Training target vector of shape (n_train_samples,).
-        X_test: Test feature matrix of shape (n_test_samples, n_features).
-        y_test: Test target vector of shape (n_test_samples,).
-        model_config: Optional dictionary with model hyperparameters. Defaults to:
-            {
-                'hidden_layers': [64, 32, 16],
-                'dropout_rate': 0.2,
-                'learning_rate': 0.001,
-                'batch_size': 32,
-                'epochs': 100,
-                'patience': 10,
-                'validation_split': 0.2
-            }
-    
-    Returns:
-        Dictionary containing:
-            - 'model': Trained Keras model instance
-            - 'history': Training history object with loss curves
-            - 'predictions': Predicted values on test set
-            - 'r2_score': R² coefficient of determination
-            - 'mse': Mean squared error
-            - 'mae': Mean absolute error
-    
-    Raises:
-        ValueError: If input arrays have incompatible shapes or insufficient data
-        RuntimeError: If model training fails
-    
-    Example:
-        Basic usage with default configuration:
-        
-        >>> results = dl_model(X_train, y_train, X_test, y_test)
-        >>> print(f"R² Score: {results['r2_score']:.4f}")
-        >>> print(f"MSE: {results['mse']:.4f}")
-        
-        Custom model configuration:
-        
-        >>> config = {
-        ...     'hidden_layers': [128, 64, 32],
-        ...     'dropout_rate': 0.3,
-        ...     'learning_rate': 0.0005,
-        ...     'epochs': 200
-        ... }
-        >>> results = dl_model(X_train, y_train, X_test, y_test, config)
-        
-    Note:
-        - Input features are automatically scaled using StandardScaler
-        - Model weights are saved to 'best_model.h5' during training  # Updated filename
-        - Early stopping monitors validation loss with patience parameter
-        - For time series data, consider using LSTM layers instead of dense layers
+    This function supports both feedforward (Dense) and Recurrent (LSTM) neural networks.
+    LSTM is generally much better for time series price data.
     """
     # Validate input shapes
     if X_train.shape[0] != y_train.shape[0]:
         raise ValueError(
             f"X_train and y_train must have same number of samples. "
             f"Got X_train: {X_train.shape[0]}, y_train: {y_train.shape[0]}"
-        )
-    if X_test.shape[0] != y_test.shape[0]:
-        raise ValueError(
-            f"X_test and y_test must have same number of samples. "
-            f"Got X_test: {X_test.shape[0]}, y_test: {y_test.shape[0]}"
-        )
-    if X_train.shape[1] != X_test.shape[1]:
-        raise ValueError(
-            f"X_train and X_test must have same number of features. "
-            f"Got X_train: {X_train.shape[1]}, X_test: {X_test.shape[1]}"
         )
     
     # Set default model configuration
@@ -132,9 +78,10 @@ def models(
         'dropout_rate': 0.2,
         'learning_rate': 0.001,
         'batch_size': 32,
-        'epochs': 1000,
-        'patience': 100,
-        'validation_split': 0.1
+        'epochs': 200,
+        'patience': 20,
+        'validation_split': 0.1,
+        'sequence_length': 30
     }
     config = {**default_config, **(model_config or {})}
     
@@ -146,24 +93,64 @@ def models(
     # Scale target variable
     y_scaler = StandardScaler().fit(y_train.reshape(-1, 1))
     y_train_s = y_scaler.transform(y_train.reshape(-1, 1)).ravel()
+    y_test_s = y_scaler.transform(y_test.reshape(-1, 1)).ravel()
+
+    # Prepare holder for adjusted test index when sequences are used
+    x_test_idx_actual: Optional[Sequence] = None
+
+    if use_lstm:
+        # Prepare sequences for LSTM
+        seq_len = config['sequence_length']
+        X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train_s, seq_len)
+        X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test_s, seq_len)
+        
+        if X_train_seq.shape[0] == 0 or X_test_seq.shape[0] == 0:
+            print("Not enough data for the specified sequence length. Falling back to Dense model.")
+            use_lstm = False
+        else:
+            X_train_final, y_train_final = X_train_seq, y_train_seq
+            X_test_final, y_test_final = X_test_seq, y_test_seq
+            y_test_actual = y_test[seq_len:]
+            if x_test_idx is not None:
+                try:
+                    x_test_idx_actual = x_test_idx[seq_len:]
+                except Exception:
+                    x_test_idx_actual = None
     
+    if not use_lstm:
+        X_train_final, y_train_final = X_train_scaled, y_train_s
+        X_test_final, y_test_final = X_test_scaled, y_test_s
+        y_test_actual = y_test
+        x_test_idx_actual = x_test_idx
+
     # Build model
     model = Sequential()
     
-    # Input layer
-    model.add(Dense(
-        config['hidden_layers'][0], 
-        activation='relu', 
-        input_shape=(X_train.shape[1],)
-    ))
-    model.add(BatchNormalization())
-    model.add(Dropout(config['dropout_rate']))
-    
-    # Hidden layers
-    for units in config['hidden_layers'][1:]:
-        model.add(Dense(units, activation='relu'))
+    if use_lstm:
+        # LSTM model
+        model.add(LSTM(
+            config['hidden_layers'][0], 
+            return_sequences=True,
+            input_shape=(X_train_final.shape[1], X_train_final.shape[2])
+        ))
+        model.add(Dropout(config['dropout_rate']))
+        model.add(LSTM(config['hidden_layers'][1], return_sequences=False))
+        model.add(Dropout(config['dropout_rate']))
+    else:
+        # Input layer (Dense)
+        model.add(Dense(
+            config['hidden_layers'][0], 
+            activation='relu', 
+            input_shape=(X_train_final.shape[1],)
+        ))
         model.add(BatchNormalization())
         model.add(Dropout(config['dropout_rate']))
+        
+        # Hidden layers
+        for units in config['hidden_layers'][1:]:
+            model.add(Dense(units, activation='relu'))
+            model.add(BatchNormalization())
+            model.add(Dropout(config['dropout_rate']))
     
     # Output layer (regression)
     model.add(Dense(1, activation='linear'))
@@ -184,42 +171,35 @@ def models(
         verbose=1
     )
     
-    checkpoint = ModelCheckpoint(
-        'best_model.h5',  # Changed from 'best_model.keras' to avoid Windows filename issues
-        monitor='val_loss',
-        save_best_only=True,
-        verbose=1
-    )
-    
     # Train model
-    print("Training deep learning model...")
+    print(f"Training {'LSTM' if use_lstm else 'Dense'} deep learning model...")
     try:
         history = model.fit(
-            X_train_scaled, y_train_s,
+            X_train_final, y_train_final,
             validation_split=config['validation_split'],
             epochs=config['epochs'],
             batch_size=config['batch_size'],
-            callbacks=[early_stopping, checkpoint],
+            callbacks=[early_stopping],
             verbose=1
         )
     except Exception as e:
         raise RuntimeError(f"Model training failed: {e}") from e
     
     # Make predictions
-    pred_s = model.predict(X_test_scaled).ravel()
+    pred_s = model.predict(X_test_final).ravel()
     predictions = y_scaler.inverse_transform(pred_s.reshape(-1, 1)).ravel()
     
     # Calculate metrics
-    r2 = r2_score(y_test, predictions)
-    mse = mean_squared_error(y_test, predictions)
-    mae = np.mean(np.abs(y_test - predictions))
+    r2 = r2_score(y_test_actual, predictions)
+    mse = mean_squared_error(y_test_actual, predictions)
+    mae = np.mean(np.abs(y_test_actual - predictions))
     
     print(f"R² Score: {r2:.4f}")
     print(f"MSE: {mse:.4f}")
     print(f"MAE: {mae:.4f}")
     
-    # Create visualizations
-    _plot_predictions(y_test, predictions)
+    # Create visualizations (pass date indices when available)
+    _plot_predictions(y_test_actual, predictions, x_idx=x_test_idx_actual)
     _plot_training_history(history)
     
     return {
@@ -229,17 +209,18 @@ def models(
         'r2_score': r2,
         'mse': mse,
         'mae': mae,
-        'scaler': scaler  # Include scaler for future predictions
+        'scaler': scaler
     }
 
 
-def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> None:
+def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Sequence] = None) -> None:
     """
     Create scatter plot and time series comparison of predictions vs actual values.
     
     Args:
         y_true: Actual target values
         y_pred: Predicted target values
+        x_idx: Optional x-axis indices (dates or sequence) matching y_true/y_pred
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
@@ -253,10 +234,22 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # Time series plot
-    ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
-    ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
-    ax2.set_xlabel('Sample Index')
+    # Time series plot: use x_idx if provided
+    if x_idx is not None:
+        try:
+            ax2.plot(x_idx, y_true, '.-', label='Actual', color='blue', alpha=0.7)
+            ax2.plot(x_idx, y_pred, label='Predicted', color='red', alpha=0.7)
+            ax2.set_xlabel('Date' if (hasattr(x_idx, 'dtype') and 'datetime' in str(x_idx.dtype)) else 'Sample Index')
+            fig.autofmt_xdate()
+        except Exception:
+            ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
+            ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
+            ax2.set_xlabel('Sample Index')
+    else:
+        ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
+        ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
+        ax2.set_xlabel('Sample Index')
+
     ax2.set_ylabel('Close Price')
     ax2.set_title('Predicted vs Actual Close Prices Over Time')
     ax2.legend()
