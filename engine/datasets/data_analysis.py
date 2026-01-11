@@ -23,10 +23,15 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
+import ml_model
+import dl_model
 
 # Try importing parsing helpers from data_visual.py with a resilient fallback
 try:
@@ -96,17 +101,21 @@ def compute_basic_stats(s: pd.Series) -> Dict[str, Optional[float]]:
 
 def prepare_analysis_data(
     raw: Any,
+    start_date: Optional[Union[str, datetime.date]] = None,
+    end_date: Optional[Union[str, datetime.date]] = None,
 ) -> Dict[str, Any]:
     """
     Prepare dataframes and summary values from preprocessed FinMind-like data.
 
     This function loads and processes financial data from various sources,
     creating structured DataFrames for analysis and computing basic statistics.
-    It provides correlation analysis.
+    It provides correlation analysis. Optionally filters data by date range.
 
     Args:
         raw: Either a path to a JSON file (str), a list of records, or a dict
              (as loaded from JSON). Supports wrapper format {"data": [...]}.
+        start_date: Optional start date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
+        end_date: Optional end date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
 
     Returns:
         A dictionary with the following keys:
@@ -123,6 +132,7 @@ def prepare_analysis_data(
 
     Raises:
         FileNotFoundError: If raw is a string path and the file doesn't exist
+        ValueError: If start_date or end_date are invalid date strings
 
     Example:
         Basic usage with a JSON file path:
@@ -137,9 +147,15 @@ def prepare_analysis_data(
         >>> results = prepare_analysis_data(records)
         >>> print(results['df_price'].head())
 
+        Filtering by date range:
+
+        >>> results = prepare_analysis_data('data.json', start_date='2023-01-01', end_date='2023-12-31')
+        >>> print(f"Filtered records: {len(results['df_rec'])}")
+
     Note:
         The function normalizes numeric columns.
         Correlation matrix is computed only for available numeric columns.
+        If start_date or end_date are provided, all computations are based on filtered data.
     """
     # Load JSON if `raw` is a path
     records: List[dict]
@@ -188,6 +204,43 @@ def prepare_analysis_data(
         if col in df_rec.columns:
             df_rec[col] = _safe_to_numeric(df_rec[col])
 
+    # Apply date filtering if provided
+    if start_date or end_date:
+        s = None
+        e = None
+        if start_date:
+            if isinstance(start_date, str):
+                try:
+                    s = datetime.strptime(start_date, '%Y-%m-%d').date()
+                except ValueError:
+                    raise ValueError(f"Invalid start_date format: {start_date}. Use YYYY-MM-DD.")
+            elif isinstance(start_date, datetime.date):
+                s = start_date
+            else:
+                raise ValueError("start_date must be str or date object")
+        if end_date:
+            if isinstance(end_date, str):
+                try:
+                    e = datetime.strptime(end_date, '%Y-%m-%d').date()
+                except ValueError:
+                    raise ValueError(f"Invalid end_date format: {end_date}. Use YYYY-MM-DD.")
+            elif isinstance(end_date, datetime.date):
+                e = end_date
+            else:
+                raise ValueError("end_date must be str or date object")
+
+        # Default missing endpoints to available data bounds
+        if s and not e:
+            e = df_rec['date'].max().date() if not df_rec.empty else s
+        if e and not s:
+            s = df_rec['date'].min().date() if not df_rec.empty else e
+
+        # Filter dataframes
+        if not df_rec.empty and 'date' in df_rec.columns:
+            df_rec = df_rec[(df_rec['date'].dt.date >= s) & (df_rec['date'].dt.date <= e)]
+        if not df_price.empty and 'date' in df_price.columns:
+            df_price = df_price[(df_price['date'].dt.date >= s) & (df_price['date'].dt.date <= e)]
+
     # Monthly average daily_revenue (group by YYYY-MM)
     monthly_daily_revenue_mean = pd.Series(dtype=float)
     if 'daily_revenue' in df_rec.columns and not df_rec['daily_revenue'].dropna().empty:
@@ -219,9 +272,112 @@ def prepare_analysis_data(
         'eps_stats': eps_stats,
         'gross_profit_stats': gross_profit_stats,
         'correlation': correlation,
+        'df_metric': corr_df,
     }
 
+def data_analyzer(metric_df: pd.DataFrame) -> None:
+    """
+    Analyze the correlation DataFrame and print insights.
 
+    Args:
+        metric_df: DataFrame containing numeric columns for correlation analysis.
+    """
+    algorithms = {"regression": True, "classification": False, "deep_learning": True} # configurable options for analysis types
+
+    print(f"Shape of input Metric DataFrame: {metric_df.shape}")
+    print(f"Type of input Metric DataFrame: {type(metric_df)}")
+    if metric_df.empty:
+        print("Metric DataFrame is empty. No analysis performed.")
+        return
+    # Remove rows with NaN values
+    metric_df = metric_df.dropna() 
+
+    y = metric_df['close'].to_numpy() # Target variable
+    plt.figure(figsize=(10, 8))
+    plt.plot(y, label='Close Prices', color='blue')
+    plt.title('Close Prices Over Time')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Close Price')
+    plt.legend()
+    plt.show()
+
+    plt.figure(figsize=(10, 8))
+    plt.hist(y, bins=30, color='green', alpha=0.7)
+    plt.title('Distribution of Close Prices')
+    plt.xlabel('Close Price')
+    plt.ylabel('Frequency')
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    # Example analysis: Print correlation of each feature with the target variable  
+    sel_feature = None
+    for i, col in enumerate(metric_df.columns):
+        if col == 'close':
+            continue
+        feature = metric_df[col].to_numpy()
+        if feature.size != y.size:
+            print(f"Skipping correlation for {col} due to size mismatch.")
+            continue
+        corr = np.corrcoef(feature, y)[0, 1]
+        print(f"Correlation between 'close' and '{col}': {corr:.4f}")
+        if abs(corr) > 0.1:  # Threshold for feature selection
+            # Use append in-place if list exists, otherwise create a new list
+            if sel_feature:
+                sel_feature.append(col)
+            else:
+                sel_feature = [col]
+    
+    X = metric_df[sel_feature].to_numpy() if sel_feature else metric_df.drop(columns=['close']).to_numpy()
+    
+    print(f"Converted Metric DataFrame to numpy arrays: X shape {X.shape}, y shape {y.shape}")
+    print(f"Selected features for model fitting: {sel_feature}")
+
+    samples = X.shape[0]
+    train_ratio = 0.9
+    X_train = X[:round(samples*train_ratio)]
+    y_train = y[:round(samples*train_ratio)]   
+    X_test = X[round(samples*train_ratio):]
+    y_test = y[round(samples*train_ratio):]
+    print(f"Split data into training and testing sets: X_train {X_train.shape}, X_test {X_test.shape}")
+    
+    # plt.figure(figsize=(10, 6))
+    # plt.scatter(X[:, 0], y, alpha=0.5)
+    # plt.title(f'Scatter Plot of {sel_feature[0] if sel_feature else "Feature 0"} vs Close Price')
+    # plt.xlabel(sel_feature[0] if sel_feature else "Feature 0")
+    # plt.ylabel('Close Price')
+    # plt.grid(True, alpha=0.3)
+    # plt.show()
+
+    if algorithms.get("regression"):
+        print("\nStarting Regression Model Fitting...")
+        ml_model.regression_models(X_train, y_train, X_test, y_test)
+
+    if algorithms.get("classification"):
+        print("\nStarting Classification Model Fitting...")
+
+        # Semi-supervised Learning: Generate cluster labels to use as targets
+        # This captures hidden structures (e.g., market regimes) to assist classification
+        results_cluster = ml_model.clustering_model(X_train, y_train, X_test, y_test, n_clusters=30, show_plots=False)
+        y_train_cluster = results_cluster["train_clusters"]
+        y_test_cluster = results_cluster["test_clusters"] 
+        y_representative_target = results_cluster["representative_targets"]
+
+        plt.figure(figsize=(10, 6))
+        plt.scatter(y_train, y_train_cluster, c=y_train_cluster, cmap='viridis', alpha=0.5)
+        plt.title('Cluster Assignments vs Close Price (Training Set)')
+        plt.xlabel('Close Price')
+        plt.ylabel('Cluster Label')
+        plt.colorbar(label='Cluster Label')
+        plt.grid(True, alpha=0.3)
+        plt.show()
+        
+        # Classification model fitting
+        ml_model.classification_models(X_train, y_train_cluster, X_test, y_test_cluster, y_representative_target, y_test, show_plots=True)
+
+    if algorithms.get("deep_learning"):
+        print("\nStarting Deep Learning Model Fitting...")
+        dl_model.models(X_train, y_train, X_test, y_test)
+    
 if __name__ == '__main__':
     import argparse
 
@@ -232,66 +388,22 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     try:
-        results = prepare_analysis_data(args.json_path)
+        results = prepare_analysis_data(args.json_path, start_date=args.start_date, end_date=args.end_date)
     except FileNotFoundError as e:
+        print(e)
+        raise SystemExit(1)
+    except ValueError as e:
         print(e)
         raise SystemExit(1)
 
     df_rec = results['df_rec']
     df_price = results['df_price']
 
-    # If user provided date filters, apply them (inclusive)
-    if args.start_date or args.end_date:
-        from datetime import datetime
-        try:
-            s = datetime.strptime(args.start_date, '%Y-%m-%d').date() if args.start_date else None
-            e = datetime.strptime(args.end_date, '%Y-%m-%d').date() if args.end_date else None
-        except ValueError:
-            print('Invalid date format for --start-date or --end-date. Use YYYY-MM-DD.')
-            raise SystemExit(1)
-
-        # Default missing endpoints to available data bounds
-        if s and not e:
-            e = df_rec['date'].max().date() if not df_rec.empty else s
-        if e and not s:
-            s = df_rec['date'].min().date() if not df_rec.empty else e
-
-        # Filter dataframes
-        if not df_rec.empty and 'date' in df_rec.columns:
-            df_rec = df_rec[(df_rec['date'].dt.date >= s) & (df_rec['date'].dt.date <= e)]
-        if not df_price.empty and 'date' in df_price.columns:
-            df_price = df_price[(df_price['date'].dt.date >= s) & (df_price['date'].dt.date <= e)]
-
-        # Recompute basic derived stats from filtered data
-        monthly_daily_revenue_mean = pd.Series(dtype=float)
-        if 'daily_revenue' in df_rec.columns and not df_rec['daily_revenue'].dropna().empty:
-            df_rev = df_rec[['date', 'daily_revenue']].dropna(subset=['date']).copy()
-            df_rev['month'] = df_rev['date'].dt.to_period('M')
-            monthly_daily_revenue_mean = df_rev.groupby('month')['daily_revenue'].mean()
-
-        eps_stats = compute_basic_stats(df_rec['eps']) if 'eps' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
-        gross_profit_stats = compute_basic_stats(df_rec['gross_profit']) if 'gross_profit' in df_rec.columns else compute_basic_stats(pd.Series(dtype=float))
-
-        # Correlation among numeric columns of interest
-        # We use pairwise correlation to handle sparse data (like quarterly EPS vs daily price)
-        corr_cols = [c for c in ('close', 'volume', 'daily_revenue', 'foreign_investor_net', 'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 'ShortSaleBalanceChange', 'eps', 'gross_profit') if c in df_rec.columns]
-        correlation = pd.DataFrame()
-        if corr_cols:
-            corr_df = df_rec[corr_cols].apply(pd.to_numeric, errors='coerce')
-            if not corr_df.empty:
-                correlation = corr_df.corr()
-
-        # Update results dict for printing
-        results['monthly_daily_revenue_mean'] = monthly_daily_revenue_mean
-        results['eps_stats'] = eps_stats
-        results['gross_profit_stats'] = gross_profit_stats
-        results['correlation'] = correlation
-
     stock_id = df_rec['stock_id'].iloc[0] if not df_rec.empty and 'stock_id' in df_rec.columns else ''
     start_date = df_rec['date'].min().date() if not df_rec.empty and 'date' in df_rec.columns else None
     end_date = df_rec['date'].max().date() if not df_rec.empty and 'date' in df_rec.columns else None
 
-    print('\n'+"="*40)
+    print('\n'+"="*35)
     print('Data Analysis Preparation Results')
     print(f"Prepared data for stock: {stock_id}")
     print(f"Filtered date range: {start_date} -> {end_date}")
@@ -303,9 +415,13 @@ if __name__ == '__main__':
     print('\nGross Profit stats:')
     print(results['gross_profit_stats'])
 
-    if not results['correlation'].empty:
-        print('\nCorrelation matrix:')
-        print(results['correlation'])
+    # # Correlation matrix
+    # if not results['correlation'].empty:
+    #     print('\nCorrelation matrix:')
+    #     print(results['correlation'])
 
+    print('\n'+'='*35)
+    print("Start Data Analysis")
+    data_analyzer(results['df_metric'])
 
     print(f"\n\nFiltered date range: {start_date} -> {end_date}")

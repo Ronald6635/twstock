@@ -49,15 +49,15 @@ coverage.xml
 *.mo
 *.pot
 
-# Django stuff:
+# Django stuff
 *.log
 local_settings.py
 
-# Flask stuff:
+# Flask stuff
 instance/
 .webassets-cache
 
-# Scrapy stuff:
+# Scrapy stuff
 .scrapy
 
 # Sphinx documentation
@@ -98,12 +98,35 @@ ENV/
 # mypy
 .mypy_cache/
 
+# pytest
+.pytest_cache/
+
 # Emacs
 *~
 \#.*\#
 *.\#
+
+# OS-specific
+.DS_Store
+
+# IDEs and editors
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs and temporary files
+debug.log
+*.out
+logs/
+*.tmp
+
+# Custom project files
 docs/reference/
 cache/
 engine/datasets/*/*.json
 engine/datasets/*/*.csv
 engine/datasets/*/*.html
+
+# GitHub workflows
+.github/
+engine/datasets/best_model.*
