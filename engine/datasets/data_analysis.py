@@ -191,6 +191,7 @@ def prepare_analysis_data(
     raw: Any,
     start_date: Optional[Union[str, datetime.date]] = None,
     end_date: Optional[Union[str, datetime.date]] = None,
+    day_shift: int = -1,
 ) -> Dict[str, Any]:
     """
     Prepare dataframes and summary values from preprocessed FinMind-like data.
@@ -204,6 +205,7 @@ def prepare_analysis_data(
              (as loaded from JSON). Supports wrapper format {"data": [...]}.
         start_date: Optional start date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
         end_date: Optional end date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
+        day_shift: Integer, number of days to shift for target_close (default: -1, i.e., next day's close).
 
     Returns:
         A dictionary with the following keys:
@@ -225,25 +227,26 @@ def prepare_analysis_data(
     Example:
         Basic usage with a JSON file path:
 
-        >>> results = prepare_analysis_data('data/preprocessed_1727.json')
+        >>> results = prepare_analysis_data('data/preprocessed_1727.json', day_shift=-1)
         >>> print(f"Records: {len(results['df_rec'])}")
         >>> print(f"EPS mean: {results['eps_stats']['mean']}")
 
         Using with a list of records:
 
         >>> records = [{'date': '2023-01-01', 'close': 100.0, 'eps': 1.5}]
-        >>> results = prepare_analysis_data(records)
+        >>> results = prepare_analysis_data(records, day_shift=-1)
         >>> print(results['df_price'].head())
 
         Filtering by date range:
 
-        >>> results = prepare_analysis_data('data.json', start_date='2023-01-01', end_date='2023-12-31')
+        >>> results = prepare_analysis_data('data.json', start_date='2023-01-01', end_date='2023-12-31', day_shift=-1)
         >>> print(f"Filtered records: {len(results['df_rec'])}")
 
     Note:
         The function normalizes numeric columns.
         Correlation matrix is computed only for available numeric columns.
         If start_date or end_date are provided, all computations are based on filtered data.
+        The day_shift parameter controls the target_close shift (e.g., -1 for next day, -2 for two days ahead).
     """
     # Load JSON if `raw` is a path
     records: List[dict]
@@ -295,8 +298,8 @@ def prepare_analysis_data(
     # Calculate Technical Indicators
     if not df_rec.empty and 'close' in df_rec.columns:
         df_rec = calculate_technical_indicators(df_rec)
-        # Create Target: Next Day's Close Price
-        df_rec['target_close'] = df_rec['close'].shift(-1)
+        # Create Target: Shifted Close Price (controlled by day_shift)
+        df_rec['target_close'] = df_rec['close'].shift(day_shift)
         # Drop rows with NaN (from indicators and shifted target)
         df_rec = df_rec.dropna(subset=['SMA_20', 'RSI', 'target_close'])
 
@@ -718,10 +721,16 @@ if __name__ == '__main__':
     parser.add_argument('json_path', nargs='?', default=os.path.join(os.path.dirname(__file__), 'preprocessed_1727.json'), help='Path to preprocessed JSON file')
     parser.add_argument('--start-date', dest='start_date', help='Filter start date (YYYY-MM-DD)', default=None)
     parser.add_argument('--end-date', dest='end_date', help='Filter end date (YYYY-MM-DD)', default=None)
+    parser.add_argument('--day-shift', dest='day_shift', type=int, default=-1, help='Number of days to shift for target_close (default: -1, next day)')
     args = parser.parse_args()
 
     try:
-        results = prepare_analysis_data(args.json_path, start_date=args.start_date, end_date=args.end_date)
+        results = prepare_analysis_data(
+            args.json_path,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            day_shift=args.day_shift
+        )
     except FileNotFoundError as e:
         print(e)
         raise SystemExit(1)
