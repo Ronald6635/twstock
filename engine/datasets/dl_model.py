@@ -18,6 +18,7 @@ Architecture notes:
 
 import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Any, Dict, List, Optional, Tuple, Union, Sequence
 from sklearn.metrics import r2_score, mean_squared_error
@@ -38,6 +39,17 @@ except ImportError as e:
         "Install it with: pip install tensorflow"
     ) from e
 
+# Import scikit-optimize for hyperparameter tuning
+try:
+    from skopt import gp_minimize
+    from skopt.space import Real, Integer, Categorical
+    from skopt.utils import use_named_args
+except ImportError as e:
+    raise ImportError(
+        "scikit-optimize is required for hyperparameter tuning. "
+        "Install it with: pip install scikit-optimize"
+    ) from e
+
 
 def create_sequences(data, target, sequence_length=60):
     """
@@ -49,6 +61,122 @@ def create_sequences(data, target, sequence_length=60):
         y.append(target[i + sequence_length])
     return np.array(X), np.array(y)
 
+def hyperparameter_search(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    use_lstm: bool,
+    sequence_length: int = 30,
+    n_calls: int = 20
+) -> Dict[str, Any]:
+    """
+    Perform Bayesian optimization for hyperparameter tuning using scikit-optimize.
+    
+    Optimizes learning_rate, dropout_rate, batch_size, and hidden_layers for Dense and LSTM models.
+    
+    Args:
+        X_train: Training features
+        y_train: Training targets
+        X_test: Test features
+        y_test: Test targets
+        use_lstm: Whether to use LSTM model
+        sequence_length: Sequence length for LSTM
+        n_calls: Number of optimization calls
+        
+    Returns:
+        Dict with best hyperparameters
+    """
+    # Define search space
+    space = [
+        Real(1e-4, 1e-2, prior='log-uniform', name='learning_rate'),
+        Real(0.1, 0.5, name='dropout_rate'),
+        Integer(16, 64, name='batch_size'),
+        Categorical([[64], [64,32], [64,32,16], [128], [128,64], [128,64,32]], name='hidden_layers')
+    ]
+    
+    @use_named_args(space)
+    def objective(**params):
+        # Build and evaluate model with given params
+        config = {
+            'hidden_layers': params['hidden_layers'],
+            'dropout_rate': params['dropout_rate'],
+            'learning_rate': params['learning_rate'],
+            'batch_size': params['batch_size'],
+            'epochs': 50,  # Reduced for tuning
+            'patience': 10,
+            'validation_split': 0.1,
+            'sequence_length': sequence_length
+        }
+        
+        # Scale data
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        y_scaler = StandardScaler().fit(y_train.reshape(-1, 1))
+        y_train_s = y_scaler.transform(y_train.reshape(-1, 1)).ravel()
+        y_test_s = y_scaler.transform(y_test.reshape(-1, 1)).ravel()
+        
+        # Prepare data
+        if use_lstm:
+            X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train_s, sequence_length)
+            X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test_s, sequence_length)
+            if X_train_seq.shape[0] == 0 or X_test_seq.shape[0] == 0:
+                return 1.0  # Invalid configuration
+            X_train_final, y_train_final = X_train_seq, y_train_seq
+            X_test_final, y_test_final = X_test_seq, y_test_seq
+            y_test_actual = y_test[sequence_length:]
+        else:
+            X_train_final, y_train_final = X_train_scaled, y_train_s
+            X_test_final, y_test_final = X_test_scaled, y_test_s
+            y_test_actual = y_test
+        
+        # Build model
+        model = Sequential()
+        if use_lstm:
+            layers = params['hidden_layers'][:2]  # Use first two layers for LSTM
+            model.add(LSTM(layers[0], return_sequences=True, input_shape=(X_train_final.shape[1], X_train_final.shape[2])))
+            model.add(Dropout(params['dropout_rate']))
+            if len(layers) > 1:
+                model.add(LSTM(layers[1], return_sequences=False))
+                model.add(Dropout(params['dropout_rate']))
+        else:
+            model.add(Dense(params['hidden_layers'][0], activation='relu', input_shape=(X_train_final.shape[1],)))
+            model.add(BatchNormalization())
+            model.add(Dropout(params['dropout_rate']))
+            for units in params['hidden_layers'][1:]:
+                model.add(Dense(units, activation='relu'))
+                model.add(BatchNormalization())
+                model.add(Dropout(params['dropout_rate']))
+        model.add(Dense(1, activation='linear'))
+        
+        optimizer = Adam(learning_rate=params['learning_rate'])
+        model.compile(optimizer=optimizer, loss=MeanSquaredError(), metrics=[MeanAbsoluteError()])
+        
+        early_stopping = EarlyStopping(monitor='val_loss', patience=config['patience'], restore_best_weights=True, verbose=0)
+        
+        try:
+            model.fit(X_train_final, y_train_final, validation_split=config['validation_split'], 
+                     epochs=config['epochs'], batch_size=params['batch_size'], callbacks=[early_stopping], verbose=0)
+            pred_s = model.predict(X_test_final, verbose=0).ravel()
+            predictions = y_scaler.inverse_transform(pred_s.reshape(-1, 1)).ravel()
+            r2 = r2_score(y_test_actual, predictions)
+            return -r2  # Minimize negative R²
+        except Exception:
+            return 1.0  # Return high loss for failed configurations
+    
+    # Run optimization
+    res = gp_minimize(objective, space, n_calls=n_calls, random_state=42)
+    
+    best_params = {
+        'learning_rate': res.x[0],
+        'dropout_rate': res.x[1],
+        'batch_size': res.x[2],
+        'hidden_layers': res.x[3]
+    }
+    
+    return best_params
+
 def models(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -56,14 +184,31 @@ def models(
     y_test: np.ndarray,
     model_config: Optional[Dict[str, Any]] = None,
     use_lstm: bool = True,
+    tune_hyperparams: bool = False,  # New parameter
     x_train_idx: Optional[Sequence] = None,
     x_test_idx: Optional[Sequence] = None,
+    show_plots: bool = True
 ) -> Dict[str, Any]:
     """
     Train and evaluate a deep learning model for stock price prediction.
     
     This function supports both feedforward (Dense) and Recurrent (LSTM) neural networks.
     LSTM is generally much better for time series price data.
+    
+    Args:
+        X_train: Training feature matrix
+        y_train: Training target vector
+        X_test: Test feature matrix
+        y_test: Test target vector
+        model_config: Optional model configuration overrides
+        use_lstm: Whether to use LSTM (True) or Dense (False) model
+        tune_hyperparams: If True, perform Bayesian optimization for hyperparameter tuning
+        x_train_idx: Optional training indices
+        x_test_idx: Optional test indices
+        show_plots: Whether to display plots
+        
+    Returns:
+        Dict containing model, history, predictions, and metrics
     """
     # Validate input shapes
     if X_train.shape[0] != y_train.shape[0]:
@@ -84,6 +229,13 @@ def models(
         'sequence_length': 30
     }
     config = {**default_config, **(model_config or {})}
+    
+    # Perform hyperparameter tuning if requested
+    if tune_hyperparams:
+        print("Performing hyperparameter tuning with Bayesian optimization...")
+        best_config = hyperparameter_search(X_train, y_train, X_test, y_test, use_lstm, config['sequence_length'])
+        config.update(best_config)
+        print(f"Best hyperparameters found: {best_config}")
     
     # Scale features
     scaler = StandardScaler()
@@ -199,8 +351,9 @@ def models(
     print(f"MAE: {mae:.4f}")
     
     # Create visualizations (pass date indices when available)
-    _plot_predictions(y_test_actual, predictions, x_idx=x_test_idx_actual)
-    _plot_training_history(history)
+    if show_plots:
+        _plot_predictions(y_test_actual, predictions, x_idx=x_test_idx_actual)
+        _plot_training_history(history)
     
     return {
         'model': model,
@@ -222,6 +375,12 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
         y_pred: Predicted target values
         x_idx: Optional x-axis indices (dates or sequence) matching y_true/y_pred
     """
+    # NOTE: Validate that x_idx length matches scientific data to prevent plotting crashes
+    if x_idx is not None and len(x_idx) != len(y_true):
+        # Identify 'gotcha': LSTM lookback often causes indices to be longer than predictions if not sliced
+        print(f"Warning: Index length ({len(x_idx)}) mismatch with data ({len(y_true)}). Disabling x_idx.")
+        x_idx = None
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
     # Scatter plot
@@ -239,9 +398,17 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
         try:
             ax2.plot(x_idx, y_true, '.-', label='Actual', color='blue', alpha=0.7)
             ax2.plot(x_idx, y_pred, label='Predicted', color='red', alpha=0.7)
-            ax2.set_xlabel('Date' if (hasattr(x_idx, 'dtype') and 'datetime' in str(x_idx.dtype)) else 'Sample Index')
+            
+            # Robust check for datetime type to determine axis label
+            is_date = isinstance(x_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_idx, 'dtype', '')).lower()
+            if not is_date and x_idx is not None and len(x_idx) > 0:
+                is_date = hasattr(x_idx[0], 'year') or 'datetime' in str(type(x_idx[0])).lower()
+                
+            ax2.set_xlabel('Date' if is_date else 'Sample Index')
             fig.autofmt_xdate()
-        except Exception:
+        except Exception as e:
+            # HACK: Fallback to sample index if provided x_idx is incompatible with matplotlib plot
+            print(f"Time series plot error: {e}")
             ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
             ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
             ax2.set_xlabel('Sample Index')

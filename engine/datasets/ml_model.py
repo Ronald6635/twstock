@@ -19,7 +19,7 @@ Architecture notes:
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.pipeline import make_pipeline
 from sklearn.svm import SVR
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 import sklearn.linear_model
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
@@ -45,6 +45,7 @@ def regression_models(
      show_plots: bool = True,
      x_train_idx: Optional[Sequence] = None,
      x_test_idx: Optional[Sequence] = None,
+     cv: Any = TimeSeriesSplit(n_splits=5)
 ) -> Dict[str, Any]:
     """
     Fit machine learning models (linear regression and SVR) to the data, evaluate performance, and visualize results.
@@ -58,9 +59,13 @@ def regression_models(
         y_train: Training target vector as a numpy array of shape (n_train_samples,).
         X_test: Test feature matrix as a numpy array of shape (n_test_samples, n_features).
         y_test: Test target vector as a numpy array of shape (n_test_samples,).
+        show_plots: If True, displays plots of predictions vs actual values.
+        x_train_idx: Optional sequence for training data indices (e.g., dates) for plotting.
+        x_test_idx: Optional sequence for test data indices (e.g., dates) for plotting.
+        cv: Cross-validation strategy for hyperparameter tuning. Defaults to TimeSeriesSplit(n_splits=5) for time-ordered data.
         
     Returns:
-        None: This function prints results and displays plots but does not return any values.
+        Dict[str, Any]: A dictionary containing trained models, R² scores, and predictions.
         
     Raises:
         ValueError: If X_train, y_train, X_test, or y_test have incompatible shapes or insufficient data.
@@ -95,15 +100,16 @@ def regression_models(
     # Visualization for Linear Regression
     y_pred_lr = lr_model.predict(X_test_prep)
     
-    plt.figure(figsize=(8, 6))
-    plt.scatter(y_test, y_pred_lr, alpha=0.7, label='Predicted vs Actual')
-    plt.xlabel('Actual Close Prices')
-    plt.ylabel('Predicted Close Prices')
-    plt.title('Actual vs Predicted Close Prices (Polynomial Linear Regression)')
-    plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', label='Ideal Fit')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.show()
+    if show_plots:
+        plt.figure(figsize=(8, 6))
+        plt.scatter(y_test, y_pred_lr, alpha=0.7, label='Predicted vs Actual')
+        plt.xlabel('Actual Close Prices')
+        plt.ylabel('Predicted Close Prices')
+        plt.title('Actual vs Predicted Close Prices (Polynomial Linear Regression)')
+        plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', label='Ideal Fit')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.show() # Correctly moved inside if show_plots
     
     if show_plots:
         plt.figure(figsize=(8, 6))
@@ -111,7 +117,10 @@ def regression_models(
         if x_test_idx is not None:
             plt.plot(x_test_idx, y_pred_lr, label='Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
-            plt.xlabel('Date' if (hasattr(x_test_idx, 'dtype') and 'datetime' in str(x_test_idx.dtype)) else 'Sample Index')
+            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(x_test_idx) > 0:
+                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+            plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
             plt.plot(y_pred_lr, label='Predicted', alpha=0.7)
@@ -134,7 +143,7 @@ def regression_models(
         svr_model, 
         param_distributions, 
         n_iter=10, 
-        cv=3, 
+        cv=cv, 
         random_state=42,
         n_jobs=-1  # Use all available cores
     )
@@ -149,7 +158,10 @@ def regression_models(
         if x_test_idx is not None:
             plt.plot(x_test_idx, y_pred_svr, label='SVR Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
-            plt.xlabel('Date' if (hasattr(x_test_idx, 'dtype') and 'datetime' in str(x_test_idx.dtype)) else 'Sample Index')
+            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(x_test_idx) > 0:
+                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+            plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
             plt.plot(y_pred_svr, label='SVR Predicted', alpha=0.7)
@@ -171,7 +183,10 @@ def regression_models(
             plt.plot(x_test_idx, y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_pred_svr, 'g',label='SVR Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test, 'b.-', label='Actual', alpha=0.7)
-            plt.xlabel('Date' if (hasattr(x_test_idx, 'dtype') and 'datetime' in str(x_test_idx.dtype)) else 'Sample Index')
+            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(x_test_idx) > 0:
+                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+            plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
             plt.plot(y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
@@ -203,6 +218,7 @@ def classification_models(
     show_plots: bool = True,
     x_train_idx: Optional[Sequence] = None,
     x_test_idx: Optional[Sequence] = None,
+    cv: Any = TimeSeriesSplit(n_splits=5)
 ) -> Dict[str, Any]:
     """
     Implement and evaluate widely-used classification models for stock price movement prediction.
@@ -214,10 +230,15 @@ def classification_models(
     
     Args:
         X_train: Training feature matrix as a numpy array of shape (n_train_samples, n_features).
-        y_train: Training target vector as a numpy array of shape (n_train_samples,).
+        y_train_cls: Training target vector as a numpy array of shape (n_train_samples,).
         X_test: Test feature matrix as a numpy array of shape (n_test_samples, n_features).
+        y_test_cls: Test target vector as a numpy array of shape (n_test_samples,).
+        y_train: Training target vector as a numpy array of shape (n_train_samples,).
         y_test: Test target vector as a numpy array of shape (n_test_samples,).
         show_plots: If True, displays a plot comparing predicted and actual values for the best model.
+        x_train_idx: Optional sequence for training data indices (e.g., dates) for plotting.
+        x_test_idx: Optional sequence for test data indices (e.g., dates) for plotting.
+        cv: Cross-validation strategy for hyperparameter tuning. Defaults to TimeSeriesSplit(n_splits=5) for time-ordered data.
     
     Returns:
         Dict[str, Any]: A dictionary containing the trained models, accuracy scores,
@@ -278,7 +299,7 @@ def classification_models(
         RandomForestClassifier(random_state=42),
         rf_params,
         n_iter=5,
-        cv=3,
+        cv=cv,
         random_state=42,
         n_jobs=-1
     )
@@ -300,7 +321,7 @@ def classification_models(
         SVC(random_state=42),
         svc_params,
         n_iter=5,
-        cv=3,
+        cv=cv,
         random_state=42,
         n_jobs=-1
     )
@@ -330,7 +351,10 @@ def classification_models(
         if x_test_idx is not None:
             plt.plot(x_test_idx, pred_vals, label='Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test_cls, '.-', label='Actual', alpha=0.7)
-            plt.xlabel('Date' if (hasattr(x_test_idx, 'dtype') and 'datetime' in str(x_test_idx.dtype)) else 'Sample Index')
+            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(x_test_idx) > 0:
+                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+            plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
             plt.plot(pred_vals, label='Predicted', alpha=0.7)
@@ -347,7 +371,10 @@ def classification_models(
         if x_test_idx is not None:
             plt.plot(x_test_idx, pred_price_vals, label='Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
-            plt.xlabel('Date' if (hasattr(x_test_idx, 'dtype') and 'datetime' in str(x_test_idx.dtype)) else 'Sample Index')
+            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(x_test_idx) > 0:
+                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+            plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
             plt.plot(pred_price_vals, label='Predicted', alpha=0.7)
@@ -638,7 +665,10 @@ def example_run_ensemble_from_preds(
                 plt.figure(figsize=(10, 4))
                 if x_idx is not None:
                     plt.plot(x_idx, cum, label='Ensemble Cumulative Returns')
-                    plt.xlabel('Date' if (hasattr(x_idx, 'dtype') and 'datetime' in str(x_idx.dtype)) else 'Sample Index')
+                    is_date = isinstance(x_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_idx, 'dtype', '')).lower()
+                    if not is_date and len(x_idx) > 0:
+                        is_date = hasattr(x_idx[0], 'year') or 'datetime' in str(type(x_idx[0])).lower()
+                    plt.xlabel('Date' if is_date else 'Sample Index')
                     plt.gcf().autofmt_xdate()
                 else:
                     plt.plot(cum, label='Ensemble Cumulative Returns')

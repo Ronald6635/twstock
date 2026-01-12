@@ -20,40 +20,47 @@ Architecture notes:
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-import numpy as np
+import json
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Union, Tuple
 
-# Prefer package-qualified imports; fall back to adding project root to sys.path for direct execution
+# Prefer package-qualified imports; fall back to local imports for direct execution
 try:
     from engine.datasets import ml_model, dl_model
-except Exception:
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
-    from engine.datasets import ml_model, dl_model
+except (ImportError, ModuleNotFoundError):
+    try:
+        import ml_model
+        import dl_model
+    except ImportError:
+        # Fallback to adding project root to sys.path
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from engine.datasets import ml_model, dl_model
 
 # Try importing parsing helpers from data_visual.py with a resilient fallback
 try:
     from engine.datasets.data_visual import load_json_data, prepare_data_for_chart
-except Exception:  # pragma: no cover - tolerant import fallback
-    # Add the project root (two levels up from this file) so 'engine' package can be imported
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+except (ImportError, ModuleNotFoundError):
     try:
-        from engine.datasets.data_visual import load_json_data, prepare_data_for_chart
-    except Exception as err:
-        raise ModuleNotFoundError(
-            "Failed to import parsing helpers from 'engine.datasets.data_visual'. "
-            "Ensure you're running from project root or that PYTHONPATH includes the project." 
-        ) from err
+        from data_visual import load_json_data, prepare_data_for_chart
+    except ImportError:
+        # Add the project root (two levels up from this file) so 'engine' package can be imported
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        try:
+            from engine.datasets.data_visual import load_json_data, prepare_data_for_chart
+        except Exception as err:
+            raise ModuleNotFoundError(
+                "Failed to import parsing helpers from 'engine.datasets.data_visual'. "
+                "Ensure you're running from project root or that PYTHONPATH includes the project." 
+            ) from err
 
 def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -188,72 +195,29 @@ def compute_basic_stats(s: pd.Series) -> Dict[str, Optional[float]]:
 
 
 def prepare_analysis_data(
-    raw: Any,
-    start_date: Optional[Union[str, datetime.date]] = None,
-    end_date: Optional[Union[str, datetime.date]] = None,
-    day_shift: int = -1,
+    data_path: str, 
+    start_date: Optional[Union[str, date, datetime]] = None, 
+    end_date: Optional[Union[str, date, datetime]] = None, 
+    day_shift: int = -1
 ) -> Dict[str, Any]:
     """
-    Prepare dataframes and summary values from preprocessed FinMind-like data.
-
-    This function loads and processes financial data from various sources,
-    creating structured DataFrames for analysis and computing basic statistics.
-    It provides correlation analysis. Optionally filters data by date range.
+    Prepare and clean stock data for analysis and model training.
 
     Args:
-        raw: Either a path to a JSON file (str), a list of records, or a dict
-             (as loaded from JSON). Supports wrapper format {"data": [...]}.
-        start_date: Optional start date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
-        end_date: Optional end date for filtering (inclusive). Accepts str 'YYYY-MM-DD' or date object.
-        day_shift: Integer, number of days to shift for target_close (default: -1, i.e., next day's close).
+        data_path: Path to the raw JSON data file.
+        start_date: Optional filter for the start date (str, date, or datetime).
+        end_date: Optional filter for the end date (str, date, or datetime).
+        day_shift: Lag/shift applied to the target close price.
 
     Returns:
-        A dictionary with the following keys:
-            - df_price: DataFrame with columns ['date','open','high','low','close','volume']
-              (dates parsed as datetime)
-            - df_rec: DataFrame of original records with numeric financial columns normalized
-            - df_institutional: DataFrame for institutional entries (if any)
-            - df_margin: DataFrame for margin entries (if any)
-            - df_revenue: DataFrame for revenue entries (if any)
-            - monthly_daily_revenue_mean: Series indexed by Period (monthly avg daily_revenue)
-            - eps_stats: dict of basic EPS statistics (count, mean, median, etc.)
-            - gross_profit_stats: dict of basic gross profit statistics
-            - correlation: correlation matrix DataFrame among available numeric columns
-
-    Raises:
-        FileNotFoundError: If raw is a string path and the file doesn't exist
-        ValueError: If start_date or end_date are invalid date strings
-
-    Example:
-        Basic usage with a JSON file path:
-
-        >>> results = prepare_analysis_data('data/preprocessed_1727.json', day_shift=-1)
-        >>> print(f"Records: {len(results['df_rec'])}")
-        >>> print(f"EPS mean: {results['eps_stats']['mean']}")
-
-        Using with a list of records:
-
-        >>> records = [{'date': '2023-01-01', 'close': 100.0, 'eps': 1.5}]
-        >>> results = prepare_analysis_data(records, day_shift=-1)
-        >>> print(results['df_price'].head())
-
-        Filtering by date range:
-
-        >>> results = prepare_analysis_data('data.json', start_date='2023-01-01', end_date='2023-12-31', day_shift=-1)
-        >>> print(f"Filtered records: {len(results['df_rec'])}")
-
-    Note:
-        The function normalizes numeric columns.
-        Correlation matrix is computed only for available numeric columns.
-        If start_date or end_date are provided, all computations are based on filtered data.
-        The day_shift parameter controls the target_close shift (e.g., -1 for next day, -2 for two days ahead).
+        A dictionary containing processed DataFrames and generated metrics.
     """
     # Load JSON if `raw` is a path
     records: List[dict]
-    if isinstance(raw, str):
-        if not os.path.exists(raw):
-            raise FileNotFoundError(f"JSON file not found: {raw}")
-        raw_loaded = load_json_data(raw)
+    if isinstance(data_path, str):
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"JSON file not found: {data_path}")
+        raw_loaded = load_json_data(data_path)
         # support wrapper shape {"data": [...]}
         if isinstance(raw_loaded, dict) and isinstance(raw_loaded.get('data'), list):
             records = raw_loaded['data']
@@ -261,10 +225,10 @@ def prepare_analysis_data(
             records = raw_loaded
         else:
             records = []
-    elif isinstance(raw, dict) and isinstance(raw.get('data'), list):
-        records = raw.get('data')
-    elif isinstance(raw, list):
-        records = raw
+    elif isinstance(data_path, dict) and isinstance(data_path.get('data'), list):
+        records = data_path.get('data')
+    elif isinstance(data_path, list):
+        records = data_path
     else:
         records = []
 
@@ -362,7 +326,7 @@ def prepare_analysis_data(
                     s = datetime.strptime(start_date, '%Y-%m-%d').date()
                 except ValueError:
                     raise ValueError(f"Invalid start_date format: {start_date}. Use YYYY-MM-DD.")
-            elif isinstance(start_date, datetime.date):
+            elif isinstance(start_date, date):
                 s = start_date
             else:
                 raise ValueError("start_date must be str or date object")
@@ -372,7 +336,7 @@ def prepare_analysis_data(
                     e = datetime.strptime(end_date, '%Y-%m-%d').date()
                 except ValueError:
                     raise ValueError(f"Invalid end_date format: {end_date}. Use YYYY-MM-DD.")
-            elif isinstance(end_date, datetime.date):
+            elif isinstance(end_date, date):
                 e = end_date
             else:
                 raise ValueError("end_date must be str or date object")
@@ -437,9 +401,16 @@ def prepare_analysis_data(
         'df_metric': corr_df,
     }
 
-def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
+def data_analyzer(
+    df: pd.DataFrame, 
+    run_trees: bool = False, 
+    show_plots: bool = True
+) -> Dict[str, Any]:
     """
-    Analyze the correlation DataFrame and print insights.
+    Perform statistical analysis and feature correlation checks on preprocessed stock data.
+
+    This function calculates various metrics, generates correlation heatmaps, 
+    and optionally executes tree-based importance analysis.
 
     Args:
         metric_df: DataFrame containing numeric columns for correlation analysis.
@@ -457,57 +428,65 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
         from train_trees import train_tree_models  # fallback for local runs
 
 
-    print(f"Shape of input Metric DataFrame: {metric_df.shape}")
-    print(f"Type of input Metric DataFrame: {type(metric_df)}")
-    if metric_df.empty:
+    print(f"Shape of input Metric DataFrame: {df.shape}")
+    print(f"Type of input Metric DataFrame: {type(df)}")
+    if df.empty:
         print("Metric DataFrame is empty. No analysis performed.")
         return
     # Remove rows with NaN values
-    metric_df = metric_df.dropna()
+    df = df.dropna()
 
     # Choose target series (keep pandas Series to preserve index)
-    if 'target_close' in metric_df.columns:
-        y_series = metric_df['target_close']  # Target variable: Tomorrow's Close
+    if 'target_close' in df.columns:
+        y_series = df['target_close']  # Target variable: Tomorrow's Close
         target_col = 'target_close'
     else:
-        y_series = metric_df['close']  # Fallback
+        y_series = df['close']  # Fallback
         target_col = 'close'
 
     # Determine x-axis values: prefer DatetimeIndex, otherwise look for a 'date' column, otherwise fallback to integer index
     if isinstance(y_series.index, pd.DatetimeIndex):
         x_values = y_series.index
         xlabel = 'Date'
-    elif 'date' in metric_df.columns:
-        x_values = pd.to_datetime(metric_df['date'])
+    elif 'date' in df.columns:
+        x_values = pd.to_datetime(df['date'])
         xlabel = 'Date'
     else:
         x_values = range(len(y_series))
         xlabel = 'Sample Index'
 
-    plt.figure(figsize=(10, 8))
-    plt.plot(x_values, y_series.values, label=f'Target Close Prices ({ "Tomorrow" if target_col=="target_close" else "Close"})', color='blue')
-    plt.title('Target Close Prices Over Time')
-    plt.xlabel(xlabel)
-    plt.ylabel('Close Price')
-    plt.legend()
-    plt.gcf().autofmt_xdate()
-    plt.show()
+    if show_plots:
+        plt.figure(figsize=(10, 8))
+        plt.plot(x_values, y_series.values, label=f'Target Close Prices ({ "Tomorrow" if target_col=="target_close" else "Close"})', color='blue')
+        plt.title('Target Close Prices Over Time')
+        plt.xlabel(xlabel)
+        plt.ylabel('Close Price')
+        plt.legend()
+        plt.gcf().autofmt_xdate()
+        plt.show()
 
-    plt.figure(figsize=(10, 8))
-    plt.hist(y_series.values, bins=30, color='green', alpha=0.7)
-    plt.title('Distribution of Target Close Prices')
-    plt.xlabel('Close Price')
-    plt.ylabel('Frequency')
-    plt.grid(True, alpha=0.3)
-    plt.show()
+        plt.figure(figsize=(10, 8))
+        plt.hist(y_series.values, bins=30, color='green', alpha=0.7)
+        plt.title('Distribution of Target Close Prices')
+        plt.xlabel('Close Price')
+        plt.ylabel('Frequency')
+        plt.grid(True, alpha=0.3)
+        plt.show()
 
     # Example analysis: Print correlation of each feature with the target variable  
     sel_feature = []
-    for i, col in enumerate(metric_df.columns):
-        if col == target_col or col == 'close': # Don't use future close or current close as feature directly if we want a real prediction
+    for i, col in enumerate(df.columns):
+        if col == target_col or col == 'close' or col == 'date' or col == 'stock_id':
             continue
-        feature = metric_df[col].to_numpy()
-        if feature.size != y_series.size:
+            
+        # Ensure the column is numeric before calculating correlation
+        if not np.issubdtype(df[col].dtype, np.number):
+            continue
+
+        feature = df[col].to_numpy()
+        y_vals = y_series.values
+        
+        if feature.size != y_vals.size:
             print(f"Skipping correlation for {col} due to size mismatch.")
             continue
         corr = np.corrcoef(feature, y_series.values)[0, 1]
@@ -515,7 +494,7 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
         if abs(corr) > 0.05:  # Lowered threshold for feature selection
             sel_feature.append(col)
     
-    X = metric_df[sel_feature].to_numpy() if sel_feature else metric_df.drop(columns=[target_col]).to_numpy()
+    X = df[sel_feature].to_numpy() if sel_feature else df.drop(columns=[target_col]).to_numpy()
     
     print(f"Converted Metric DataFrame to numpy arrays: X shape {X.shape}, y shape {y_series.size}")
     print(f"Selected features for model fitting: {sel_feature}")
@@ -559,7 +538,7 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
             preds = {k: results_reg[f"y_pred_{k}"] for k in ("lr", "svr") if f"y_pred_{k}" in results_reg}
             if preds:
                 # current_prices: current close aligned with preds (same slice used for y_test which is target_close)
-                current_prices = metric_df['close'].values[split_idx:]
+                current_prices = df['close'].values[split_idx:]
                 # y_test are target next-day closes; convert to next-period returns
                 y_returns = (y_test - current_prices) / current_prices
                 res = ml_model.example_run_ensemble_from_preds(
@@ -622,13 +601,13 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
             if preds_dl:
                 preds_arr = preds_dl['dl']
                 m = len(preds_arr)
-                test_closes = metric_df['close'].values[split_idx:]
+                test_closes = df['close'].values[split_idx:]
                 # If predictions are shorter, compute sequence offset
                 if m <= len(test_closes):
                     seq_len = len(test_closes) - m
                     # current_prices aligned to the prediction (current price is the day before the predicted next-day close)
                     start_idx = split_idx + seq_len - 1 if seq_len > 0 else split_idx
-                    current_prices = metric_df['close'].values[start_idx : start_idx + m]
+                    current_prices = df['close'].values[start_idx : start_idx + m]
                     # y_test aligned with predictions
                     y_true_actual = y_test[seq_len:] if seq_len > 0 else y_test[:m]
                     # compute returns (next-day return aligned with predictions)
@@ -654,13 +633,13 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
         for task in tasks:
             print(f"\nStarting Time-Series Tree Model Fitting ({task.upper()})...")
             try:
-                results_trees = train_tree_models(metric_df, target_col='Daily_Return', task=task, n_splits=5, n_iter=20, test_ratio=0.1)
+                results_trees = train_tree_models(df, target_col='Daily_Return', task=task, n_splits=5, n_iter=20, test_ratio=0.1)
                 
                 if task == 'regression':
                     print(f"RF Test R²: {results_trees.get('rf_test_r2', 0):.4f}")
                     print(f"GB Test R²: {results_trees.get('gb_test_r2', 0):.4f}")
                     # Plot predictions vs actual using date index when available
-                    if 'test_index' in results_trees and 'y_test' in results_trees:
+                    if 'test_index' in results_trees and 'y_test' in results_trees and show_plots:
                         try:
                             ti = results_trees['test_index']
                             y_test_vals = results_trees['y_test']
@@ -671,7 +650,12 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
                             plt.plot(ti, y_pred_rf, label='RF Predicted', color='tab:blue', alpha=0.8)
                             plt.plot(ti, y_pred_gb, label='GB Predicted', color='tab:orange', alpha=0.8)
                             plt.title(f'Tree Model Predictions vs Actual ({task.upper()})')
-                            plt.xlabel('Date')
+                            
+                            is_date = isinstance(ti, pd.DatetimeIndex) or 'datetime' in str(getattr(ti, 'dtype', '')).lower()
+                            if not is_date and ti is not None and len(ti) > 0:
+                                is_date = hasattr(ti[0], 'year') or 'datetime' in str(type(ti[0])).lower()
+                            plt.xlabel('Date' if is_date else 'Sample Index')
+                            
                             plt.ylabel('Target')
                             plt.legend()
                             plt.gcf().autofmt_xdate()
@@ -686,7 +670,7 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
                         print("RF Classification Report (Directional):")
                         print(results_trees['rf_report'])
                     # Plot classification predictions over time
-                    if 'test_index' in results_trees and 'y_test' in results_trees:
+                    if 'test_index' in results_trees and 'y_test' in results_trees and show_plots:
                         try:
                             ti = results_trees['test_index']
                             y_test_vals = results_trees['y_test']
@@ -697,7 +681,12 @@ def data_analyzer(metric_df: pd.DataFrame, run_trees: bool = False) -> None:
                             plt.scatter(ti, y_pred_rf, label='RF Pred', c='tab:blue', s=6, alpha=0.7)
                             plt.scatter(ti, y_pred_gb, label='GB Pred', c='tab:orange', s=6, alpha=0.7)
                             plt.title(f'Tree Model Classification Predictions ({task.upper()})')
-                            plt.xlabel('Date')
+                            
+                            is_date = isinstance(ti, pd.DatetimeIndex) or 'datetime' in str(getattr(ti, 'dtype', '')).lower()
+                            if not is_date and ti is not None and len(ti) > 0:
+                                is_date = hasattr(ti[0], 'year') or 'datetime' in str(type(ti[0])).lower()
+                            plt.xlabel('Date' if is_date else 'Sample Index')
+                            
                             plt.ylabel('Class Label')
                             plt.legend()
                             plt.gcf().autofmt_xdate()
@@ -719,9 +708,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Prepare dataframes and stats from a preprocessed JSON file (no charts).')
     parser.add_argument('json_path', nargs='?', default=os.path.join(os.path.dirname(__file__), 'preprocessed_1727.json'), help='Path to preprocessed JSON file')
-    parser.add_argument('--start-date', dest='start_date', help='Filter start date (YYYY-MM-DD)', default=None)
-    parser.add_argument('--end-date', dest='end_date', help='Filter end date (YYYY-MM-DD)', default=None)
-    parser.add_argument('--day-shift', dest='day_shift', type=int, default=-1, help='Number of days to shift for target_close (default: -1, next day)')
+    parser.add_argument('--start_date', dest='start_date', help='Filter start date (YYYY-MM-DD)', default=None)
+    parser.add_argument('--end_date', dest='end_date', help='Filter end date (YYYY-MM-DD)', default=None)
+    parser.add_argument('--day_shift', dest='day_shift', type=int, default=-1, help='Number of days to shift for target_close (default: -1, next day)')
+    parser.add_argument('--show_plots', '--show-plots', action='store_true', dest='show_plots', help='Display plots (default: True)')
+    parser.add_argument('--no_plots', '--no-plots', action='store_false', dest='show_plots', help='Suppress all plots')
+    parser.set_defaults(show_plots=True)
     args = parser.parse_args()
 
     try:
@@ -764,6 +756,5 @@ if __name__ == '__main__':
 
     print('\n'+'='*35)
     print("Start Data Analysis")
-    data_analyzer(results['df_metric'], run_trees=False)
-
+    data_analyzer(results['df_metric'], run_trees=False, show_plots=args.show_plots)
     print(f"\n\nFiltered date range: {start_date} -> {end_date}")
