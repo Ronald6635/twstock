@@ -195,6 +195,7 @@ class UnifiedPipeline:
         
         print(f"Dataset Split: train={len(X_train)}, test={len(X_test)}")
         print(f"Feature set size: {len(feat_cols)}")
+        print(f"Feature set: {feat_cols}")
         
         results = {
             'metadata': {

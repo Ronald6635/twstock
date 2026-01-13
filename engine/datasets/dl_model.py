@@ -27,8 +27,8 @@ from sklearn.preprocessing import StandardScaler
 # Import TensorFlow with fallback for environments without GPU support
 try:
     import tensorflow as tf
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM, Input
+    from tensorflow.keras.models import Sequential, Model
+    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM, Input, concatenate, Flatten
     from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
     from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.losses import MeanSquaredError
@@ -303,37 +303,39 @@ def models(
         y_test_actual = y_test
         x_test_idx_actual = x_test_idx
 
-    # Build model
-    model = Sequential()
+    # Build model using Functional API with Wide & Deep topology
+    input_shape = (X_train_final.shape[1], X_train_final.shape[2]) if use_lstm else (X_train_final.shape[1],)
+    inputs = Input(shape=input_shape)
     
+    # Deep path logic
     if use_lstm:
-        # LSTM model
-        model.add(Input(shape=(X_train_final.shape[1], X_train_final.shape[2])))
-        model.add(LSTM(
-            config['hidden_layers'][0], 
-            return_sequences=True
-        ))
-        model.add(Dropout(config['dropout_rate']))
-        model.add(LSTM(config['hidden_layers'][1], return_sequences=False))
-        model.add(Dropout(config['dropout_rate']))
-    else:
-        # Input layer (Dense)
-        model.add(Input(shape=(X_train_final.shape[1],)))
-        model.add(Dense(
-            config['hidden_layers'][0], 
-            activation='relu'
-        ))
-        model.add(BatchNormalization())
-        model.add(Dropout(config['dropout_rate']))
+        # LSTM stack for capturing complex temporal patterns
+        x = LSTM(config['hidden_layers'][0], return_sequences=True)(inputs)
+        x = Dropout(config['dropout_rate'])(x)
+        deep = LSTM(config['hidden_layers'][1], return_sequences=False)(x)
+        deep = Dropout(config['dropout_rate'])(deep)
         
-        # Hidden layers
+        # Wide path: Flatten sequences to capture simple linear features across time steps
+        wide = Flatten()(inputs)
+    else:
+        # Dense stack for capturing non-linear interactions between features
+        x = Dense(config['hidden_layers'][0], activation='relu')(inputs)
+        x = BatchNormalization()(x)
+        x = Dropout(config['dropout_rate'])(x)
         for units in config['hidden_layers'][1:]:
-            model.add(Dense(units, activation='relu'))
-            model.add(BatchNormalization())
-            model.add(Dropout(config['dropout_rate']))
+            x = Dense(units, activation='relu')(x)
+            x = BatchNormalization()(x)
+            x = Dropout(config['dropout_rate'])(x)
+        deep = x
+        
+        # Wide path: Direct linear connection from input features
+        wide = inputs
     
-    # Output layer (regression)
-    model.add(Dense(1, activation='linear'))
+    # Merge Wide & Deep paths
+    merged = concatenate([deep, wide])
+    output = Dense(1, activation='linear')(merged)
+    
+    model = Model(inputs=inputs, outputs=output)
     
     # Compile model
     optimizer = Adam(learning_rate=config['learning_rate'])
