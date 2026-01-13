@@ -28,7 +28,7 @@ from sklearn.preprocessing import StandardScaler
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM
+    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM, Input
     from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
     from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.losses import MeanSquaredError
@@ -87,19 +87,44 @@ def hyperparameter_search(
     Returns:
         Dict with best hyperparameters
     """
-    # Define search space
+    # Define mapping to avoid passing complex objects through skopt's internal NumPy logic
+    layer_map = {
+        "64": (64,),
+        "64,32": (64, 32),
+        "64,32,16": (64, 32, 16),
+        "128": (128,),
+        "128,64": (128, 64),
+        "128,64,32": (128, 64, 32)
+    }
+
+    # Define search space using string labels
     space = [
         Real(1e-4, 1e-2, prior='log-uniform', name='learning_rate'),
         Real(0.1, 0.5, name='dropout_rate'),
         Integer(16, 64, name='batch_size'),
-        Categorical([[64], [64,32], [64,32,16], [128], [128,64], [128,64,32]], name='hidden_layers')
+        Categorical(list(layer_map.keys()), name='hidden_layers')
     ]
     
     @use_named_args(space)
-    def objective(**params):
+    def objective(**params: Any) -> float:
+        """
+        Objective function for Bayesian optimization.
+        
+        Args:
+            **params: Hyperparameters sampled by gp_minimize.
+            
+        Returns:
+            float: The value to minimize (e.g., negative R² score).
+        """
+        # Clear the Keras session to prevent graph accumulation and tf.function retracing
+        tf.keras.backend.clear_session()
+
+        # Map the string label back to the tuple configuration
+        actual_layers = layer_map[params['hidden_layers']]
+
         # Build and evaluate model with given params
         config = {
-            'hidden_layers': params['hidden_layers'],
+            'hidden_layers': actual_layers,
             'dropout_rate': params['dropout_rate'],
             'learning_rate': params['learning_rate'],
             'batch_size': params['batch_size'],
@@ -134,14 +159,16 @@ def hyperparameter_search(
         # Build model
         model = Sequential()
         if use_lstm:
-            layers = params['hidden_layers'][:2]  # Use first two layers for LSTM
-            model.add(LSTM(layers[0], return_sequences=True, input_shape=(X_train_final.shape[1], X_train_final.shape[2])))
+            layers = actual_layers[:2]  # Use first two layers for LSTM
+            model.add(Input(shape=(X_train_final.shape[1], X_train_final.shape[2])))
+            model.add(LSTM(layers[0], return_sequences=True))
             model.add(Dropout(params['dropout_rate']))
             if len(layers) > 1:
                 model.add(LSTM(layers[1], return_sequences=False))
                 model.add(Dropout(params['dropout_rate']))
         else:
-            model.add(Dense(params['hidden_layers'][0], activation='relu', input_shape=(X_train_final.shape[1],)))
+            model.add(Input(shape=(X_train_final.shape[1],)))
+            model.add(Dense(params['hidden_layers'][0], activation='relu'))
             model.add(BatchNormalization())
             model.add(Dropout(params['dropout_rate']))
             for units in params['hidden_layers'][1:]:
@@ -172,7 +199,8 @@ def hyperparameter_search(
         'learning_rate': res.x[0],
         'dropout_rate': res.x[1],
         'batch_size': res.x[2],
-        'hidden_layers': res.x[3]
+        # map the best string result back to a list
+        'hidden_layers': list(layer_map[res.x[3]])
     }
     
     return best_params
@@ -184,7 +212,7 @@ def models(
     y_test: np.ndarray,
     model_config: Optional[Dict[str, Any]] = None,
     use_lstm: bool = True,
-    tune_hyperparams: bool = False,  # New parameter
+    tune_hyperparams: bool = False, # Whether to perform hyperparameter tuning
     x_train_idx: Optional[Sequence] = None,
     x_test_idx: Optional[Sequence] = None,
     show_plots: bool = True
@@ -280,20 +308,20 @@ def models(
     
     if use_lstm:
         # LSTM model
+        model.add(Input(shape=(X_train_final.shape[1], X_train_final.shape[2])))
         model.add(LSTM(
             config['hidden_layers'][0], 
-            return_sequences=True,
-            input_shape=(X_train_final.shape[1], X_train_final.shape[2])
+            return_sequences=True
         ))
         model.add(Dropout(config['dropout_rate']))
         model.add(LSTM(config['hidden_layers'][1], return_sequences=False))
         model.add(Dropout(config['dropout_rate']))
     else:
         # Input layer (Dense)
+        model.add(Input(shape=(X_train_final.shape[1],)))
         model.add(Dense(
             config['hidden_layers'][0], 
-            activation='relu', 
-            input_shape=(X_train_final.shape[1],)
+            activation='relu'
         ))
         model.add(BatchNormalization())
         model.add(Dropout(config['dropout_rate']))
