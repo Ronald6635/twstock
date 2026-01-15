@@ -115,6 +115,8 @@ class UnifiedPipeline:
             ValueError: If 'df_metric' is missing or no finite data remains after cleaning.
         """
         print(f"Preprocessing data and applying ML filters (show_plots={self.show_plots})...")
+        # Diagnostic: show what date filters we received (and their types)
+        print(f"Diagnostic: received start_date={start_date!r} ({type(start_date)}), end_date={end_date!r} ({type(end_date)})")
         raw_data: Dict[str, Any] = data_analysis.prepare_analysis_data(
             data_path, start_date=start_date, end_date=end_date, day_shift=day_shift, pred_date=pred_date
         )
@@ -124,6 +126,41 @@ class UnifiedPipeline:
             raise ValueError("The analysis module did not return 'df_metric'.")
             
         df: pd.DataFrame = raw_data['df_metric'].copy()
+        # Enforce start/end filtering here as a safeguard in case prepare_analysis_data ignores the args.
+        # Coerce to pandas Timestamp for reliable comparison with 'date' column or DatetimeIndex.
+        if start_date is not None:
+            p_start = pd.to_datetime(start_date)
+            if 'date' in df.columns:
+                before = len(df)
+                df = df[df['date'] >= p_start]
+                print(f"Diagnostic: applied start_date filter {p_start} -> rows {before} -> {len(df)}")
+            elif isinstance(df.index, pd.DatetimeIndex):
+                before = len(df)
+                df = df[df.index >= p_start]
+                print(f"Diagnostic: applied start_date filter to index {p_start} -> rows {before} -> {len(df)}")
+        if end_date is not None:
+            p_end = pd.to_datetime(end_date)
+            if 'date' in df.columns:
+                before = len(df)
+                df = df[df['date'] <= p_end]
+                print(f"Diagnostic: applied end_date filter {p_end} -> rows {before} -> {len(df)}")
+            elif isinstance(df.index, pd.DatetimeIndex):
+                before = len(df)
+                df = df[df.index <= p_end]
+                print(f"Diagnostic: applied end_date filter to index {p_end} -> rows {before} -> {len(df)}")
+        # Post-filter diagnostic: show final filtered date range (helps avoid confusion)
+        try:
+            if not df.empty:
+                if 'date' in df.columns:
+                    fstart = df['date'].min()
+                    fend = df['date'].max()
+                    print(f"Diagnostic: After applying start/end filters, filtered range: {fstart} -> {fend} (rows={len(df)})")
+                elif isinstance(df.index, pd.DatetimeIndex):
+                    fstart = df.index.min()
+                    fend = df.index.max()
+                    print(f"Diagnostic: After applying start/end filters (index): {fstart} -> {fend} (rows={len(df)})")
+        except Exception as e:
+            print(f"Post-filter diagnostic failed: {e}")
         
         # Identify possible target columns
         target_cols = ['target_close', 'Daily_Return']
@@ -220,6 +257,15 @@ class UnifiedPipeline:
                 split_idx = int(n * (1 - self.test_ratio))
         else:
             split_idx = int(n * (1 - self.test_ratio))
+
+        # --- SAFEGUARD: ensure split produces non-empty train and test sets ---
+        if n < 2:
+            raise ValueError("Not enough samples to perform train/test split (need at least 2).")
+        if split_idx <= 0 or split_idx >= n:
+            print("Warning: computed split would produce empty train or test set. Falling back to test_ratio.")
+            split_idx = int(n * (1 - self.test_ratio))
+            # Clamp to ensure at least one sample in train and test
+            split_idx = max(1, min(split_idx, n - 1))
 
         train_df = df.iloc[:split_idx]
         test_df = df.iloc[split_idx:]

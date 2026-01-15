@@ -337,7 +337,8 @@ def prepare_analysis_data(
 
             print('\nDiagnostic: Data trimming summary:')
             print(f"original range: {orig_start} -> {orig_end}")
-            print(f"processed range: {proc_start} -> {proc_end}")
+            # Make it explicit this is the processed (pre-filter) range
+            print(f"processed (pre-filter) range: {proc_start} -> {proc_end}")
             print(f"first fully-valid row in processed data: {first_valid_idx}")
             print(f"last fully-valid row in processed data: {last_valid_idx}")
             print(f"Columns with NaNs near start (first 10 rows): {top_trim_cols}")
@@ -387,6 +388,15 @@ def prepare_analysis_data(
             df_rec = df_rec[(df_rec['date'].dt.date >= s) & (df_rec['date'].dt.date <= e)]
         if not df_price.empty and 'date' in df_price.columns:
             df_price = df_price[(df_price['date'].dt.date >= s) & (df_price['date'].dt.date <= e)]
+
+    # Post-filter diagnostic so logs show the final filtered range (helps avoid confusion)
+    try:
+        fstart = df_rec['date'].min() if not df_rec.empty and 'date' in df_rec.columns else None
+        fend = df_rec['date'].max() if not df_rec.empty and 'date' in df_rec.columns else None
+        print("\nDiagnostic: After applying start/end date filters (if any):")
+        print(f"filtered range: {fstart} -> {fend}")
+    except Exception as e:
+        print(f"Post-filter diagnostic failed: {e}")
 
     # Monthly average daily_revenue (group by YYYY-MM)
     monthly_daily_revenue_mean = pd.Series(dtype=float)
