@@ -55,6 +55,7 @@ class UnifiedPipeline:
         task: Literal['regression', 'classification'] = 'regression',
         n_splits: int = 5,
         test_ratio: float = 0.2,
+        pred_date: Optional[str] = None,
         random_state: int = 42,
         use_ensemble: bool = True,
         show_plots: bool = True
@@ -67,6 +68,7 @@ class UnifiedPipeline:
             task: Task type ('regression' or 'classification')
             n_splits: Number of TimeSeriesSplit folds
             test_ratio: Fraction of data for final holdout test
+            pred_date: Fixed date to start prediction (replaces test_ratio if provided)
             random_state: Random seed for reproducibility
             use_ensemble: Whether to run ensemble backtesting
             show_plots: Whether to display plots
@@ -75,6 +77,7 @@ class UnifiedPipeline:
         self.task = task
         self.n_splits = n_splits
         self.test_ratio = test_ratio
+        self.pred_date = pred_date
         self.random_state = random_state
         self.use_ensemble = use_ensemble
         self.show_plots = show_plots
@@ -87,6 +90,7 @@ class UnifiedPipeline:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         day_shift: int = -1,
+        pred_date: Optional[str] = None,
         **kwargs: Any
     ) -> pd.DataFrame:
         """
@@ -101,6 +105,7 @@ class UnifiedPipeline:
             start_date: Start date for filtering in YYYY-MM-DD format (optional).
             end_date: End date for filtering in YYYY-MM-DD format (optional).
             day_shift: Lag/shift days for the target variable (default: -1).
+            pred_date: Optional specific date to split train/test sets.
             **kwargs: Additional ignored keyword arguments for forward compatibility.
             
         Returns:
@@ -109,9 +114,9 @@ class UnifiedPipeline:
         Raises:
             ValueError: If 'df_metric' is missing or no finite data remains after cleaning.
         """
-        print("Preprocessing data and applying ML filters...")
+        print(f"Preprocessing data and applying ML filters (show_plots={self.show_plots})...")
         raw_data: Dict[str, Any] = data_analysis.prepare_analysis_data(
-            data_path, start_date=start_date, end_date=end_date, day_shift=day_shift
+            data_path, start_date=start_date, end_date=end_date, day_shift=day_shift, pred_date=pred_date
         )
         self.data: Dict[str, Any] = raw_data
 
@@ -130,6 +135,14 @@ class UnifiedPipeline:
         
         if not self.feat_cols:
             raise ValueError("No numeric feature columns found for training.")
+            
+        # Identify fundamental columns that might be missing for recent dates (e.g. EPS, Revenue)
+        # We forward fill these as they represent quarterly/monthly states that persist.
+        # This keeps the latest entries (like Jan 2026) valid if price data is available.
+        fundamental_keywords = ['revenue', 'eps', 'profit', 'margin', 'ratio', 'income', 'asset', 'liability']
+        fundamental_cols = [c for c in self.feat_cols if any(k in c.lower() for k in fundamental_keywords)]
+        if fundamental_cols:
+            df[fundamental_cols] = df[fundamental_cols].ffill()
             
         # Clean data: Replace any inf with NaN and drop rows missing features or targets
         cols_to_clean = self.feat_cols + available_targets
@@ -181,7 +194,33 @@ class UnifiedPipeline:
             df = df.set_index('date')
             
         n = len(df)
-        split_idx = int(n * (1 - self.test_ratio))
+        
+        # Use pred_date for splitting if provided, else use test_ratio
+        if self.pred_date:
+            try:
+                # Convert pred_date to match index type (DatetimeIndex or object)
+                p_date = pd.to_datetime(self.pred_date)
+                if isinstance(df.index, pd.DatetimeIndex):
+                    # Find first index >= pred_date
+                    future_df = df[df.index >= p_date]
+                    if not future_df.empty:
+                        split_idx = df.index.get_loc(future_df.index[0])
+                        # if get_loc returns a slice or boolean array, take the first start
+                        if isinstance(split_idx, (slice, np.ndarray)):
+                             split_idx = split_idx.start if isinstance(split_idx, slice) else np.where(split_idx)[0][0]
+                        print(f"Split data at date: {self.pred_date} (index {split_idx})")
+                    else:
+                        print(f"Warning: pred_date {self.pred_date} is after the last available date. Falling back to test_ratio.")
+                        split_idx = int(n * (1 - self.test_ratio))
+                else:
+                    print("Warning: Index is not DatetimeIndex. Falling back to test_ratio.")
+                    split_idx = int(n * (1 - self.test_ratio))
+            except Exception as e:
+                print(f"Error splitting data by pred_date ({e}). Falling back to test_ratio.")
+                split_idx = int(n * (1 - self.test_ratio))
+        else:
+            split_idx = int(n * (1 - self.test_ratio))
+
         train_df = df.iloc[:split_idx]
         test_df = df.iloc[split_idx:]
         
@@ -299,7 +338,8 @@ class UnifiedPipeline:
                 X_train, y_train, X_test, y_test,
                 show_plots=self.show_plots,
                 x_train_idx=train_idx,
-                x_test_idx=test_idx
+                x_test_idx=test_idx,
+                cv=TimeSeriesSplit(n_splits=self.n_splits)
             )
         else:
             # For classification, convert to binary direction
@@ -323,6 +363,9 @@ class UnifiedPipeline:
             n_iter=20,
             random_state=self.random_state,
             test_ratio=self.test_ratio,
+            pred_date=self.pred_date,
+            feat_cols=self.feat_cols,
+            show_plots=self.show_plots,
             save=False
         )
 
@@ -435,32 +478,38 @@ class UnifiedPipeline:
             'win_rate': win_rate
         }
         
-        # Add ensemble plot if show_plots is enabled
-        if self.show_plots:
+        # Add ensemble plot if show_plots is enabled and predictions exist
+        if self.show_plots and min_len > 0 and ensemble_preds is not None and len(ensemble_preds) > 0:
             try:
                 import matplotlib.pyplot as plt
                 ti = results.get('test_idx')
                 if ti is not None:
-                    # Account for alignment in time-series index
-                    ti_aligned = ti[-min_len:]
-                    
-                    plt.figure(figsize=(12, 6))
-                    plt.plot(ti_aligned, y_test_aligned, '.-', label='Actual', color='black', alpha=0.8)
-                    plt.plot(ti_aligned, ensemble_preds, label='Ensemble Predicted', color='tab:purple', linewidth=2, alpha=0.9)
-                    
-                    plt.title(f'Ensemble Model Predictions vs Actual ({self.task.upper()})')
-                    
-                    is_date = isinstance(ti_aligned, pd.DatetimeIndex) or 'datetime' in str(getattr(ti_aligned, 'dtype', '')).lower()
-                    if not is_date and ti_aligned is not None and len(ti_aligned) > 0:
-                        is_date = hasattr(ti_aligned[0], 'year') or 'datetime' in str(type(ti_aligned[0])).lower()
-                        
-                    plt.xlabel('Date' if is_date else 'Sample Index')
-                    plt.ylabel('Value')
-                    plt.legend()
-                    if isinstance(ti_aligned, pd.DatetimeIndex):
-                        plt.gcf().autofmt_xdate()
-                    plt.grid(True, alpha=0.3)
-                    plt.show()
+                    try:
+                        ti_aligned = ti[-min_len:]
+                    except Exception:
+                        ti_aligned = list(ti)[-min_len:]
+                    x_idx = ti_aligned
+                else:
+                    # Fallback to integer index aligned to predictions
+                    x_idx = np.arange(len(ensemble_preds))
+
+                plt.figure(figsize=(12, 6))
+                plt.plot(x_idx, y_test_aligned, '.-', label='Actual', color='black', alpha=0.8)
+                plt.plot(x_idx, ensemble_preds, label='Ensemble Predicted', color='tab:purple', linewidth=2, alpha=0.9)
+
+                plt.title(f'Ensemble Model Predictions vs Actual ({self.task.upper()})')
+
+                is_date = isinstance(x_idx, pd.DatetimeIndex) or ('datetime' in str(getattr(x_idx, 'dtype', '')))
+                if not is_date and x_idx is not None and len(x_idx) > 0:
+                    is_date = hasattr(x_idx[0], 'year') or 'datetime' in str(type(x_idx[0])).lower()
+
+                plt.xlabel('Date' if is_date else 'Sample Index')
+                plt.ylabel('Value')
+                plt.legend()
+                if isinstance(x_idx, pd.DatetimeIndex):
+                    plt.gcf().autofmt_xdate()
+                plt.grid(True, alpha=0.3)
+                plt.show()
             except Exception as e:
                 print(f"Could not plot ensemble predictions: {e}")
 
@@ -526,6 +575,17 @@ class UnifiedPipeline:
             else:
                 summary.append(f"Random Forest Acc: {self._safe_format(trees.get('rf_test_acc', 'N/A'))}")
                 summary.append(f"Gradient Boosting Acc: {self._safe_format(trees.get('gb_test_acc', 'N/A'))}")
+                
+            # Add top features from tree models if available
+            if 'rf_importances' in trees:
+                rf_imp = trees['rf_importances']
+                sorted_rf = sorted(rf_imp.items(), key=lambda x: x[1], reverse=True)
+                summary.append(f"Top 3 RF Features: {', '.join([f'{k} ({v:.3f})' for k, v in sorted_rf[:3]])}")
+            
+            if 'gb_importances' in trees:
+                gb_imp = trees['gb_importances']
+                sorted_gb = sorted(gb_imp.items(), key=lambda x: x[1], reverse=True)
+                summary.append(f"Top 3 GB Features: {', '.join([f'{k} ({v:.3f})' for k, v in sorted_gb[:3]])}")
         
         if 'deep_learning' in self.results:
             dl = self.results['deep_learning']
@@ -538,6 +598,14 @@ class UnifiedPipeline:
             summary.append(f"Ensemble Total Return: {self._safe_format(metrics.get('total_return', 'N/A'))}")
             summary.append(f"Ensemble Sharpe: {self._safe_format(metrics.get('sharpe', 'N/A'))}")
             summary.append(f"Ensemble Win Rate: {self._safe_format(metrics.get('win_rate', 'N/A'))}")
+
+        # Add Features used for prediction
+        if 'metadata' in self.results and 'feature_columns' in self.results['metadata']:
+            summary.append("\nFeatures Used for Prediction:")
+            summary.append("-" * 30)
+            feat_list = self.results['metadata']['feature_columns']
+            for i, feat in enumerate(feat_list, 1):
+                summary.append(f"{i}. {feat}")
 
         # Add Chinese indicator explanations as requested
         summary.append("\n指標解釋:")
@@ -566,9 +634,10 @@ def main() -> None:
     parser.add_argument("--output", type=str, help="Path to save the output results (JSON format)", default="results.json")
     parser.add_argument("--start_date", type=str, help="Start date for data filtering (YYYY-MM-DD)", default=None)
     parser.add_argument("--end_date", type=str, help="End date for data filtering (YYYY-MM-DD)", default=None)
+    parser.add_argument("--pred_date", type=str, help="Prediction start date for train/test split (YYYY-MM-DD)", default=None)
     parser.add_argument("--day_shift", "--day-shift", type=int, help="Lag/shift days for the target variable", default=-1)
     parser.add_argument("--test_ratio", type=float, help="Fraction of data to use for testing", default=0.1)
-    parser.add_argument("--n_splits", type=int, help="Number of splits for TimeSeriesSplit", default=5)
+    parser.add_argument("--n_splits", type=int, help="Number of splits for TimeSeriesSplit", default=30)
     parser.add_argument("--random_state", type=int, help="Random seed for reproducibility", default=42)
     parser.add_argument("--use_ensemble", action="store_true", help="Enable ensemble backtesting", default=True)
     parser.add_argument("--include_raw", action="store_true", help="Include large raw datasets in the output JSON", default=False)
@@ -599,7 +668,7 @@ def main() -> None:
             pipeline_args[flag] = pipeline_args[flag] not in [0, "0", "false", "False"]
     
     # Convert date strings to actual dates
-    for date_arg in ["start_date", "end_date"]:
+    for date_arg in ["start_date", "end_date", "pred_date"]:
         if date_arg in pipeline_args and isinstance(pipeline_args[date_arg], str):
             try:
                 pipeline_args[date_arg] = datetime.strptime(pipeline_args[date_arg], "%Y-%m-%d").date()
@@ -617,9 +686,10 @@ def main() -> None:
         task=pipeline_args.get("task", "regression"),
         n_splits=pipeline_args.get("n_splits", 5),
         test_ratio=pipeline_args.get("test_ratio", 0.2),
+        pred_date=pipeline_args.get("pred_date"),
         random_state=pipeline_args.get("random_state", 42),
         use_ensemble=pipeline_args.get("use_ensemble", True),
-        show_plots=pipeline_args.get("show_plots", False)
+        show_plots=pipeline_args.get("show_plots")
     )
     
 
@@ -627,12 +697,12 @@ def main() -> None:
         data_path=pipeline_args["data"],
         start_date=pipeline_args.get("start_date"),
         end_date=pipeline_args.get("end_date"),
+        pred_date=pipeline_args.get("pred_date"),
         day_shift=pipeline_args.get("day_shift", -1),
         test_ratio=pipeline_args.get("test_ratio", 0.2),
         n_splits=pipeline_args.get("n_splits", 5),
         random_state=pipeline_args.get("random_state", 42),
         use_ensemble=pipeline_args.get("use_ensemble", True),
-        show_plots=pipeline_args.get("show_plots", False),
         include_raw=pipeline_args.get("include_raw", False)
     )
 

@@ -26,6 +26,9 @@ def train_tree_models(
     n_iter: int = 20,
     random_state: int = 42,
     test_ratio: float = 0.1,
+    pred_date: Optional[str] = None,
+    feat_cols: Optional[List[str]] = None,
+    show_plots: bool = True,
     save: bool = False,
     save_dir: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -39,6 +42,8 @@ def train_tree_models(
         n_iter: Number of parameter samples for RandomizedSearchCV.
         random_state: Seed for reproducibility.
         test_ratio: Fraction to reserve for final holdout test.
+        pred_date: Optional specific date to split train/test sets.
+        feat_cols: Optional list of columns to use as features.
         save: Whether to save the learned estimators to disk.
         save_dir: Directory to save models.
 
@@ -70,8 +75,9 @@ def train_tree_models(
     df = df.dropna()  # drop the last row (no target) and any other NaNs
 
     # Drop non-feature columns
-    excluded = {'target_next', target_col, 'close', 'target_close', 'date', 'stock_id'}
-    feat_cols = [c for c in df.columns if c not in excluded and pd.api.types.is_numeric_dtype(df[c])]
+    if feat_cols is None:
+        excluded = {'target_next', target_col, 'close', 'target_close', 'date', 'stock_id'}
+        feat_cols = [c for c in df.columns if c not in excluded and pd.api.types.is_numeric_dtype(df[c])]
 
     if not feat_cols:
         raise ValueError("No numeric feature columns found for tree training")
@@ -81,7 +87,24 @@ def train_tree_models(
 
     # Time-ordered train/test split
     n = X.shape[0]
-    split_idx = int(n * (1 - test_ratio))
+    
+    if pred_date:
+        try:
+            p_date = pd.to_datetime(pred_date)
+            # Find first index >= pred_date
+            future_mask = df.index >= p_date
+            if future_mask.any():
+                split_idx = np.where(future_mask)[0][0]
+                print(f"Tree Split at date: {pred_date} (index {split_idx})")
+            else:
+                print(f"Warning: Tree pred_date {pred_date} after range. Falling back to test_ratio.")
+                split_idx = int(n * (1 - test_ratio))
+        except Exception as e:
+            print(f"Error splitting trees by pred_date ({e}). Falling back to test_ratio.")
+            split_idx = int(n * (1 - test_ratio))
+    else:
+        split_idx = int(n * (1 - test_ratio))
+
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
 
@@ -166,6 +189,11 @@ def train_tree_models(
         print("Sample test (true vs RF pred vs GB pred):")
         for a, b, c in list(zip(y_test[:5], y_pred_rf[:5], y_pred_gb[:5])):
             print(f"{a:.6f} | {b:.6f} | {c:.6f}")
+        # Backwards-compatible keys expected by tests and external callers
+        results['rf_search'] = rf_search
+        results['gb_search'] = gb_search
+        results['rf_holdout_r2'] = results.get('rf_test_r2')
+        results['gb_holdout_r2'] = results.get('gb_test_r2')
     else:
         results['rf_test_acc'] = accuracy_score(y_test, y_pred_rf)
         results['gb_test_acc'] = accuracy_score(y_test, y_pred_gb)
@@ -176,6 +204,11 @@ def train_tree_models(
         print("Sample test (true vs RF pred vs GB pred):")
         for a, b, c in list(zip(y_test[:5], y_pred_rf[:5], y_pred_gb[:5])):
             print(f"{a} | {b} | {c}")
+        # Backwards-compatible search objects and holdout accuracy keys
+        results['rf_search'] = rf_search
+        results['gb_search'] = gb_search
+        results['rf_holdout_acc'] = results.get('rf_test_acc')
+        results['gb_holdout_acc'] = results.get('gb_test_acc')
 
     # Optional LightGBM Integration
     try:
@@ -233,6 +266,32 @@ def train_tree_models(
         import joblib
         joblib.dump(rf_best, os.path.join(save_dir, f'rf_{task}.joblib'))
         joblib.dump(gb_best, os.path.join(save_dir, f'gb_{task}.joblib'))
+
+    # 4. Visualization (Prediction plots)
+    if show_plots and X_test.shape[0] > 0:
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(10, 6))
+        # Use aggregate predictions if available
+        if 'predictions' in results and results['predictions'] is not None:
+            preds = np.asarray(results['predictions'])
+        else:
+            # Fallback to mean of RF and GB
+            preds = (y_pred_rf + y_pred_gb) / 2
+            
+        if test_index is not None:
+            plt.plot(test_index, preds, 'm--', label='Tree Ensemble Predicted', alpha=0.8)
+            plt.plot(test_index, y_test, 'k-', label='Actual', alpha=0.5)
+            plt.gcf().autofmt_xdate()
+        else:
+            plt.plot(preds, 'm--', label='Tree Ensemble Predicted', alpha=0.8)
+            plt.plot(y_test, 'k-', label='Actual', alpha=0.5)
+        
+        plt.title('Tree-based Ensemble Model Prediction vs Actual')
+        plt.xlabel('Date' if test_index is not None else 'Sample Index')
+        plt.ylabel(f'Target ({target_col})')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
 
     return results
 

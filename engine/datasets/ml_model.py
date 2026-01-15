@@ -37,6 +37,27 @@ import matplotlib.pyplot as plt
 
 __all__ = ["regression_models", "classification_models", "clustering_model", "ensemble_backtest_signals", "example_run_ensemble_from_preds"]
 
+
+def _validated_plot_index(x_idx: Optional[Sequence], y_arr: Optional[Sequence]) -> Optional[Sequence]:
+    """
+    Validate that the provided `x_idx` has the same length as `y_arr` and is safe to use for plotting.
+    Returns `x_idx` unchanged if valid, otherwise returns None and prints a warning.
+    """
+    if x_idx is None or y_arr is None:
+        return None
+    try:
+        if len(x_idx) != len(y_arr):
+            print(f"Warning: x-axis index length ({len(x_idx)}) != data length ({len(y_arr)}). Disabling indexed x-axis for plot.")
+            return None
+    except Exception:
+        try:
+            if len(list(x_idx)) != len(y_arr):
+                print(f"Warning: x-axis index length mismatch with data. Disabling indexed x-axis for plot.")
+                return None
+        except Exception:
+            return None
+    return x_idx
+
 def regression_models(
      X_train: np.ndarray,
      y_train: np.ndarray,
@@ -99,6 +120,9 @@ def regression_models(
     
     # Visualization for Linear Regression
     y_pred_lr = lr_model.predict(X_test_prep)
+
+    # Validate x-axis index for plotting to prevent length mismatch crashes
+    safe_x_test_idx = _validated_plot_index(x_test_idx, y_test)
     
     if show_plots:
         plt.figure(figsize=(8, 6))
@@ -114,12 +138,12 @@ def regression_models(
     if show_plots:
         plt.figure(figsize=(8, 6))
         # Use provided test indices for x-axis if available (better date labels)
-        if x_test_idx is not None:
-            plt.plot(x_test_idx, y_pred_lr, label='Predicted', alpha=0.7)
-            plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
-            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
-            if not is_date and len(x_test_idx) > 0:
-                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+        if safe_x_test_idx is not None:
+            plt.plot(safe_x_test_idx, y_pred_lr, label='Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
+            is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(safe_x_test_idx) > 0:
+                is_date = hasattr(safe_x_test_idx[0], 'year') or 'datetime' in str(type(safe_x_test_idx[0])).lower()
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
@@ -155,12 +179,12 @@ def regression_models(
     y_pred_svr = random_search.predict(X_test_prep)
     if show_plots:
         plt.figure(figsize=(8, 6))
-        if x_test_idx is not None:
-            plt.plot(x_test_idx, y_pred_svr, label='SVR Predicted', alpha=0.7)
-            plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
-            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
-            if not is_date and len(x_test_idx) > 0:
-                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+        if safe_x_test_idx is not None:
+            plt.plot(safe_x_test_idx, y_pred_svr, label='SVR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
+            is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(safe_x_test_idx) > 0:
+                is_date = hasattr(safe_x_test_idx[0], 'year') or 'datetime' in str(type(safe_x_test_idx[0])).lower()
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
@@ -179,13 +203,13 @@ def regression_models(
 
     if show_plots:
         plt.figure(figsize=(8, 6))
-        if x_test_idx is not None:
-            plt.plot(x_test_idx, y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
-            plt.plot(x_test_idx, y_pred_svr, 'g',label='SVR Predicted', alpha=0.7)
-            plt.plot(x_test_idx, y_test, 'b.-', label='Actual', alpha=0.7)
-            is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
-            if not is_date and len(x_test_idx) > 0:
-                is_date = hasattr(x_test_idx[0], 'year') or 'datetime' in str(type(x_test_idx[0])).lower()
+        if safe_x_test_idx is not None:
+            plt.plot(safe_x_test_idx, y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_pred_svr, 'g',label='SVR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_test, 'b.-', label='Actual', alpha=0.7)
+            is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
+            if not is_date and len(safe_x_test_idx) > 0:
+                is_date = hasattr(safe_x_test_idx[0], 'year') or 'datetime' in str(type(safe_x_test_idx[0])).lower()
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
@@ -663,11 +687,13 @@ def example_run_ensemble_from_preds(
             cum = res.get('cumulative_returns')
             if cum is not None and len(cum) > 0:
                 plt.figure(figsize=(10, 4))
-                if x_idx is not None:
-                    plt.plot(x_idx, cum, label='Ensemble Cumulative Returns')
-                    is_date = isinstance(x_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_idx, 'dtype', '')).lower()
-                    if not is_date and len(x_idx) > 0:
-                        is_date = hasattr(x_idx[0], 'year') or 'datetime' in str(type(x_idx[0])).lower()
+                # Validate x_idx length against cum
+                safe_x_idx = _validated_plot_index(x_idx, cum)
+                if safe_x_idx is not None:
+                    plt.plot(safe_x_idx, cum, label='Ensemble Cumulative Returns')
+                    is_date = isinstance(safe_x_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_idx, 'dtype', '')).lower()
+                    if not is_date and len(safe_x_idx) > 0:
+                        is_date = hasattr(safe_x_idx[0], 'year') or 'datetime' in str(type(safe_x_idx[0])).lower()
                     plt.xlabel('Date' if is_date else 'Sample Index')
                     plt.gcf().autofmt_xdate()
                 else:

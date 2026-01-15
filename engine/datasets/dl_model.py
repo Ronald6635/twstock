@@ -476,6 +476,10 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
         y_pred: Predicted target values
         x_idx: Optional x-axis indices (dates or sequence) matching y_true/y_pred
     """
+    if y_true is None or y_pred is None or len(y_true) == 0 or len(y_pred) == 0:
+        print("Warning: No data available to plot predictions.")
+        return
+
     # NOTE: Validate that x_idx length matches scientific data to prevent plotting crashes
     if x_idx is not None and len(x_idx) != len(y_true):
         # Identify 'gotcha': LSTM lookback often causes indices to be longer than predictions if not sliced

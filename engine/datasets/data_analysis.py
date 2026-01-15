@@ -21,6 +21,8 @@ Architecture notes:
 from __future__ import annotations
 
 import os
+
+from sklearn.model_selection import TimeSeriesSplit
 os.environ["KERAS_BACKEND"] = "torch"
 import sys
 import json
@@ -139,10 +141,17 @@ def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for c in ['open', 'high', 'low', 'close', 'volume']:
         if c in df.columns:
             df[c] = df[c].ffill().bfill()
+            
+    # Metadata and categorical info (like country) should also be forward filled
+    for c in ['country', 'stock_id']:
+        if c in df.columns:
+            df[c] = df[c].ffill().bfill()
 
-    # Remove rows with NaN values created by rolling windows (e.g., SMA_60) and shifts.
-    # RF/GB models in scikit-learn cannot handle NaNs.
-    df.dropna(inplace=True)
+    # Drop only if critical features are still missing after imputation.
+    # We want to keep recent data points even if some non-critical columns are delayed.
+    # The downstream ML pipeline in unified_pipeline.py will perform final cleaning.
+    critical_cols = ['close', 'volume', 'SMA_20', 'RSI']
+    df.dropna(subset=[c for c in critical_cols if c in df.columns], inplace=True)
     
     return df
 
@@ -199,7 +208,8 @@ def prepare_analysis_data(
     data_path: str, 
     start_date: Optional[Union[str, date, datetime]] = None, 
     end_date: Optional[Union[str, date, datetime]] = None, 
-    day_shift: int = -1
+    day_shift: int = -1,
+    pred_date: Optional[Union[str, date, datetime]] = None
 ) -> Dict[str, Any]:
     """
     Prepare and clean stock data for analysis and model training.
@@ -209,29 +219,47 @@ def prepare_analysis_data(
         start_date: Optional filter for the start date (str, date, or datetime).
         end_date: Optional filter for the end date (str, date, or datetime).
         day_shift: Lag/shift applied to the target close price.
+        pred_date: Optional date to start prediction (for filtering or metadata).
 
     Returns:
         A dictionary containing processed DataFrames and generated metrics.
     """
     # Load JSON if `raw` is a path
-    records: List[dict]
+    records: Union[List[dict], Dict[str, Any]] = []
     if isinstance(data_path, str):
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"JSON file not found: {data_path}")
         raw_loaded = load_json_data(data_path)
-        # support wrapper shape {"data": [...]}
-        if isinstance(raw_loaded, dict) and isinstance(raw_loaded.get('data'), list):
-            records = raw_loaded['data']
+        
+        # Support various JSON structures:
+        # 1. {"data": [...]}
+        # 2. {"stock_id": {"data": [...]}} or {"stock_id": [...]}
+        # 3. List of records directly [...]
+        # 4. Dict of lists {"price": [...], "revenue": [...]}
+        if isinstance(raw_loaded, dict):
+            # Check if it's keyed by stock ID (especially for crawler outputs or combined files)
+            first_key = next(iter(raw_loaded.keys())) if raw_loaded else None
+            # Heuristic for stock ID key: numeric or has a dash (e.g. 2330 or "京元電子-2449")
+            if first_key and (first_key.isdigit() or '-' in first_key):
+                inner_data = raw_loaded[first_key]
+                if isinstance(inner_data, dict):
+                    if 'data' in inner_data and isinstance(inner_data['data'], list):
+                        records = inner_data['data']
+                    else:
+                        # Could be the dict of lists (price, revenue, etc.)
+                        records = inner_data
+                elif isinstance(inner_data, list):
+                    records = inner_data
+            elif isinstance(raw_loaded.get('data'), list):
+                records = raw_loaded['data']
+            else:
+                records = raw_loaded
         elif isinstance(raw_loaded, list):
             records = raw_loaded
-        else:
-            records = []
-    elif isinstance(data_path, dict) and isinstance(data_path.get('data'), list):
-        records = data_path.get('data')
+    elif isinstance(data_path, dict):
+        records = data_path.get('data') if isinstance(data_path.get('data'), list) else data_path
     elif isinstance(data_path, list):
         records = data_path
-    else:
-        records = []
 
     # Use prepare_data_for_chart to defensively extract parts
     price_data, institutional_data, margin_data, revenue_data = prepare_data_for_chart(records)
@@ -263,10 +291,16 @@ def prepare_analysis_data(
     # Calculate Technical Indicators
     if not df_rec.empty and 'close' in df_rec.columns:
         df_rec = calculate_technical_indicators(df_rec)
+        
         # Create Target: Shifted Close Price (controlled by day_shift)
         df_rec['target_close'] = df_rec['close'].shift(day_shift)
-        # Drop rows with NaN (from indicators and shifted target)
-        df_rec = df_rec.dropna(subset=['SMA_20', 'RSI', 'target_close'])
+        
+        # Drop rows with NaN from critical technical indicators (head trimming)
+        # We keep the rows where only 'target_close' is NaN (usually the last row)
+        # to ensure the most recent data is available for prediction or inference.
+        indicator_cols = ['SMA_20', 'RSI']
+        available_indicators = [c for c in indicator_cols if c in df_rec.columns]
+        df_rec = df_rec.dropna(subset=available_indicators)
 
         # Diagnostic: report which columns caused trimming of head/tail
         def _diagnose_date_trimming(original_df: pd.DataFrame, processed_df: pd.DataFrame) -> None:
@@ -400,65 +434,72 @@ def prepare_analysis_data(
         'gross_profit_stats': gross_profit_stats,
         'correlation': correlation,
         'df_metric': corr_df,
+        'pred_date': pred_date
     }
 
 def data_analyzer(
-    df: pd.DataFrame, 
-    run_trees: bool = False, 
-    show_plots: bool = True
+    df: pd.DataFrame,
+    run_trees: bool = False,
+    show_plots: bool = True,
+    pred_date: Optional[Union[str, date, datetime]] = None
 ) -> Dict[str, Any]:
     """
     Perform statistical analysis and feature correlation checks on preprocessed stock data.
 
-    This function calculates various metrics, generates correlation heatmaps, 
-    and optionally executes tree-based importance analysis.
-
     Args:
-        metric_df: DataFrame containing numeric columns for correlation analysis.
+        df: DataFrame containing numeric columns for correlation analysis.
         run_trees: If True, execute time-series tree training and plot predictions with date x-axis.
-    """
-    algorithms = {"regression": True, 
-                  "trees": run_trees, 
-                  "classification": False,
-                  "deep_learning": True} # configurable options for analysis types
+        show_plots: Whether to display charts.
+        pred_date: Optional date to split train and test sets for visualization.
 
-    # Import the time-series tree training module
+    Returns:
+        Dict with analysis artifacts (keys include 'results_reg', 'results_cluster',
+        'dl_results', 'results_trees'). Empty dict is returned for empty input.
+    """
+    algorithms = {
+        "regression": True,
+        "trees": run_trees,
+        "classification": False,
+        "deep_learning": True
+    }
+
     try:
         from engine.datasets.train_trees import train_tree_models
     except Exception:
         from train_trees import train_tree_models  # fallback for local runs
 
-
     print(f"Shape of input Metric DataFrame: {df.shape}")
     print(f"Type of input Metric DataFrame: {type(df)}")
     if df.empty:
         print("Metric DataFrame is empty. No analysis performed.")
-        return
-    # Remove rows with NaN values
+        return {}  # return empty dict to respect typed return
+
+    # Drop rows with NaN for the analysis (already defensive elsewhere)
     df = df.dropna()
 
-    # Choose target series (keep pandas Series to preserve index)
+    # Choose target series
     if 'target_close' in df.columns:
-        y_series = df['target_close']  # Target variable: Tomorrow's Close
+        y_series = df['target_close']
         target_col = 'target_close'
     else:
-        y_series = df['close']  # Fallback
+        y_series = df['close']
         target_col = 'close'
 
-    # Determine x-axis values: prefer DatetimeIndex, otherwise look for a 'date' column, otherwise fallback to integer index
+    # Determine x_values (keep robust type)
     if isinstance(y_series.index, pd.DatetimeIndex):
         x_values = y_series.index
         xlabel = 'Date'
     elif 'date' in df.columns:
-        x_values = pd.to_datetime(df['date'])
+        x_values = pd.to_datetime(df['date'], errors='coerce')
         xlabel = 'Date'
     else:
-        x_values = range(len(y_series))
+        x_values = pd.Index(range(len(y_series)))
         xlabel = 'Sample Index'
 
+    # Plots (unchanged behavior)
     if show_plots:
         plt.figure(figsize=(10, 8))
-        plt.plot(x_values, y_series.values, label=f'Target Close Prices ({ "Tomorrow" if target_col=="target_close" else "Close"})', color='blue')
+        plt.plot(x_values, y_series.values, label=f'Target Close Prices ({"Tomorrow" if target_col=="target_close" else "Close"})', color='blue')
         plt.title('Target Close Prices Over Time')
         plt.xlabel(xlabel)
         plt.ylabel('Close Price')
@@ -474,81 +515,94 @@ def data_analyzer(
         plt.grid(True, alpha=0.3)
         plt.show()
 
-    # Example analysis: Print correlation of each feature with the target variable  
-    sel_feature = []
-    for i, col in enumerate(df.columns):
-        if col == target_col or col == 'close' or col == 'date' or col == 'stock_id':
+    # Feature selection via correlation
+    sel_feature: List[str] = []
+    for col in df.columns:
+        if col in (target_col, 'close', 'date', 'stock_id'):
             continue
-            
-        # Ensure the column is numeric before calculating correlation
         if not np.issubdtype(df[col].dtype, np.number):
             continue
-
         feature = df[col].to_numpy()
-        y_vals = y_series.values
-        
-        if feature.size != y_vals.size:
+        if feature.size != y_series.values.size:
             print(f"Skipping correlation for {col} due to size mismatch.")
             continue
         corr = np.corrcoef(feature, y_series.values)[0, 1]
         print(f"Correlation between '{target_col}' and '{col}': {corr:.4f}")
-        if abs(corr) > 0.1:  # Lowered threshold for feature selection
+        if abs(corr) > 0.1:
             sel_feature.append(col)
-    
-    excluded = ['SMA_5', 'SMA_20'] # exclude features known to cause overfitting
-    sel_feature = [f for f in sel_feature if f not in excluded] # filter excluded features
 
-    X = df[sel_feature].to_numpy() if sel_feature else df.drop(columns=[target_col]).to_numpy()
+    excluded = ['SMA_5']
+    sel_feature = [f for f in sel_feature if f not in excluded]
+
+    # Ensure X is numeric; if no selected features, use numeric dtypes excluding target
+    if sel_feature:
+        X_df = df[sel_feature]
+    else:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = [c for c in numeric_cols if c != target_col]
+        X_df = df[numeric_cols]
+
+    X = X_df.to_numpy()
     print(f"Converted Metric DataFrame to numpy arrays: X shape {X.shape}, y shape {y_series.size}")
-    print(f"Selected features for model fitting: {sel_feature}")
+    print(f"Selected features for model fitting: {list(X_df.columns)}")
 
     samples = X.shape[0]
-    train_ratio = 0.9
-    split_idx = round(samples * train_ratio)
+
+    # Robust pred_date splitting: coerce x_values to datetime if possible
+    split_idx = round(samples * 0.9)
+    if pred_date is not None:
+        try:
+            p_date = pd.to_datetime(pred_date)
+            xv = pd.to_datetime(pd.Index(x_values), errors='coerce')
+            # produce boolean mask, safe for non-datetime entries
+            future_mask = xv >= p_date
+            if future_mask.any():
+                split_idx = int(np.where(future_mask)[0][0])
+                print(f"Analysis split at date: {pred_date} (index {split_idx})")
+            else:
+                print(f"Warning: pred_date {pred_date} after range. Falling back to {split_idx}/{samples} split.")
+        except Exception as e:
+            print(f"Error splitting analysis by pred_date ({e}). Falling back to 90% train.")
+
     X_train = X[:split_idx]
-    y_train = y_series.values[:split_idx]   
+    y_train = y_series.values[:split_idx]
     X_test = X[split_idx:]
     y_test = y_series.values[split_idx:]
 
-    # Prepare x-axis indices for plots: prefer datetime index when available
-    if isinstance(x_values, pd.DatetimeIndex):
-        x_values_arr = x_values
-    else:
-        x_values_arr = list(x_values)
+    # Prepare x indices for plotting
+    x_values_arr = x_values if isinstance(x_values, pd.DatetimeIndex) else list(x_values)
     x_train_idx = x_values_arr[:split_idx]
     x_test_idx = x_values_arr[split_idx:]
 
     print(f"Split data into training and testing sets: X_train {X_train.shape}, X_test {X_test.shape}")
-    
-    # plt.figure(figsize=(10, 6))
-    # plt.scatter(X[:, 0], y, alpha=0.5)
-    # plt.title(f'Scatter Plot of {sel_feature[0] if sel_feature else "Feature 0"} vs Close Price')
-    # plt.xlabel(sel_feature[0] if sel_feature else "Feature 0")
-    # plt.ylabel('Close Price')
-    # plt.grid(True, alpha=0.3)
-    # plt.show()
 
+    results: Dict[str, Any] = {
+        'results_reg': None,
+        'results_cluster': None,
+        'dl_results': None,
+        'results_trees': None
+    }
+
+    # Regression
     if algorithms.get("regression"):
         print("\nStarting Regression Model Fitting...")
-        # Capture regression results so we can run the ensemble backtest on the test set
         results_reg = ml_model.regression_models(
             X_train, y_train, X_test, y_test,
-            show_plots=True, x_train_idx=x_train_idx, x_test_idx=x_test_idx
+            show_plots=show_plots, x_train_idx=x_train_idx, x_test_idx=x_test_idx,
+            cv=TimeSeriesSplit(n_splits=30)
         )
+        results['results_reg'] = results_reg
 
-        # If regression returned predictions, run example ensemble backtest (price-based)
         try:
             preds = {k: results_reg[f"y_pred_{k}"] for k in ("lr", "svr") if f"y_pred_{k}" in results_reg}
             if preds:
-                # current_prices: current close aligned with preds (same slice used for y_test which is target_close)
                 current_prices = df['close'].values[split_idx:]
-                # y_test are target next-day closes; convert to next-period returns
                 y_returns = (y_test - current_prices) / current_prices
                 res = ml_model.example_run_ensemble_from_preds(
                     preds, y_returns,
                     score_type='price',
                     current_prices=current_prices,
-                    threshold=0.002,            # 0.2% threshold
+                    threshold=0.002,
                     min_models_agree=1,
                     transaction_cost=0.0005,
                     show_plots=True,
@@ -558,14 +612,13 @@ def data_analyzer(
         except Exception as e:
             print(f"Ensemble demo skipped (error): {e}")
 
+    # Classification
     if algorithms.get("classification"):
         print("\nStarting Classification Model Fitting...")
-
-        # Semi-supervised Learning: Generate cluster labels to use as targets
-        # This captures hidden structures (e.g., market regimes) to assist classification
         results_cluster = ml_model.clustering_model(X_train, y_train, X_test, y_test, n_clusters=30, show_plots=False)
+        results['results_cluster'] = results_cluster
         y_train_cluster = results_cluster["train_clusters"]
-        y_test_cluster = results_cluster["test_clusters"] 
+        y_test_cluster = results_cluster["test_clusters"]
         y_representative_target = results_cluster["representative_targets"]
 
         plt.figure(figsize=(10, 6))
@@ -576,8 +629,7 @@ def data_analyzer(
         plt.colorbar(label='Cluster Label')
         plt.grid(True, alpha=0.3)
         plt.show()
-        
-        # Classification model fitting
+
         ml_model.classification_models(
             X_train,
             y_train_cluster,
@@ -590,13 +642,14 @@ def data_analyzer(
             x_test_idx=x_test_idx,
         )
 
+    # Deep Learning
     if algorithms.get("deep_learning"):
         print("\nStarting Deep Learning Model Fitting...")
-        # Capture DL results and run ensemble demo (handles LSTM sequence offset)
         dl_results = dl_model.models(
             X_train, y_train, X_test, y_test,
             x_train_idx=x_train_idx, x_test_idx=x_test_idx
         )
+        results['dl_results'] = dl_results
         try:
             preds_dl = {}
             if 'predictions' in dl_results:
@@ -605,17 +658,12 @@ def data_analyzer(
                 preds_arr = preds_dl['dl']
                 m = len(preds_arr)
                 test_closes = df['close'].values[split_idx:]
-                # If predictions are shorter, compute sequence offset
                 if m <= len(test_closes):
                     seq_len = len(test_closes) - m
-                    # current_prices aligned to the prediction (current price is the day before the predicted next-day close)
                     start_idx = split_idx + seq_len - 1 if seq_len > 0 else split_idx
                     current_prices = df['close'].values[start_idx : start_idx + m]
-                    # y_test aligned with predictions
                     y_true_actual = y_test[seq_len:] if seq_len > 0 else y_test[:m]
-                    # compute returns (next-day return aligned with predictions)
                     y_returns_dl = (y_true_actual - current_prices) / current_prices
-                    # align x_idx for plotting if available
                     x_idx_dl = x_test_idx[seq_len:] if (seq_len > 0 and x_test_idx is not None) else x_test_idx
                     res_dl = ml_model.example_run_ensemble_from_preds(
                         preds_dl, y_returns_dl,
@@ -630,35 +678,36 @@ def data_analyzer(
                     print("DL Ensemble metrics:", res_dl.get('metrics'))
         except Exception as e:
             print(f"DL Ensemble demo skipped (error): {e}")
-    
+
+    # Time-series trees
     if algorithms.get("trees"):
         tasks: List[Literal['regression', 'classification']] = ['regression', 'classification']
         for task in tasks:
             print(f"\nStarting Time-Series Tree Model Fitting ({task.upper()})...")
             try:
-                results_trees = train_tree_models(df, target_col='Daily_Return', task=task, n_splits=5, n_iter=20, test_ratio=0.1)
-                
+                results_trees = train_tree_models(df, target_col='Daily_Return', task=task, n_splits=30, n_iter=20, test_ratio=0.1, pred_date=pred_date, show_plots=show_plots)
+                results['results_trees'] = results_trees
+
                 if task == 'regression':
                     print(f"RF Test R²: {results_trees.get('rf_test_r2', 0):.4f}")
                     print(f"GB Test R²: {results_trees.get('gb_test_r2', 0):.4f}")
-                    # Plot predictions vs actual using date index when available
                     if 'test_index' in results_trees and 'y_test' in results_trees and show_plots:
                         try:
                             ti = results_trees['test_index']
                             y_test_vals = results_trees['y_test']
-                            y_pred_rf = results_trees['y_pred_rf']
-                            y_pred_gb = results_trees['y_pred_gb']
+                            y_pred_rf = results_trees.get('y_pred_rf')
+                            y_pred_gb = results_trees.get('y_pred_gb')
                             plt.figure(figsize=(12, 6))
                             plt.plot(ti, y_test_vals, '.-', label='Actual', color='black', alpha=0.8)
-                            plt.plot(ti, y_pred_rf, label='RF Predicted', color='tab:blue', alpha=0.8)
-                            plt.plot(ti, y_pred_gb, label='GB Predicted', color='tab:orange', alpha=0.8)
+                            if y_pred_rf is not None:
+                                plt.plot(ti, y_pred_rf, label='RF Predicted', color='tab:blue', alpha=0.8)
+                            if y_pred_gb is not None:
+                                plt.plot(ti, y_pred_gb, label='GB Predicted', color='tab:orange', alpha=0.8)
                             plt.title(f'Tree Model Predictions vs Actual ({task.upper()})')
-                            
                             is_date = isinstance(ti, pd.DatetimeIndex) or 'datetime' in str(getattr(ti, 'dtype', '')).lower()
                             if not is_date and ti is not None and len(ti) > 0:
                                 is_date = hasattr(ti[0], 'year') or 'datetime' in str(type(ti[0])).lower()
                             plt.xlabel('Date' if is_date else 'Sample Index')
-                            
                             plt.ylabel('Target')
                             plt.legend()
                             plt.gcf().autofmt_xdate()
@@ -672,24 +721,23 @@ def data_analyzer(
                     if 'rf_report' in results_trees:
                         print("RF Classification Report (Directional):")
                         print(results_trees['rf_report'])
-                    # Plot classification predictions over time
                     if 'test_index' in results_trees and 'y_test' in results_trees and show_plots:
                         try:
                             ti = results_trees['test_index']
                             y_test_vals = results_trees['y_test']
-                            y_pred_rf = results_trees['y_pred_rf']
-                            y_pred_gb = results_trees['y_pred_gb']
+                            y_pred_rf = results_trees.get('y_pred_rf')
+                            y_pred_gb = results_trees.get('y_pred_gb')
                             plt.figure(figsize=(12, 4))
                             plt.scatter(ti, y_test_vals, label='Actual', c='black', s=10)
-                            plt.scatter(ti, y_pred_rf, label='RF Pred', c='tab:blue', s=6, alpha=0.7)
-                            plt.scatter(ti, y_pred_gb, label='GB Pred', c='tab:orange', s=6, alpha=0.7)
+                            if y_pred_rf is not None:
+                                plt.scatter(ti, y_pred_rf, label='RF Pred', c='tab:blue', s=6, alpha=0.7)
+                            if y_pred_gb is not None:
+                                plt.scatter(ti, y_pred_gb, label='GB Pred', c='tab:orange', s=6, alpha=0.7)
                             plt.title(f'Tree Model Classification Predictions ({task.upper()})')
-                            
                             is_date = isinstance(ti, pd.DatetimeIndex) or 'datetime' in str(getattr(ti, 'dtype', '')).lower()
                             if not is_date and ti is not None and len(ti) > 0:
                                 is_date = hasattr(ti[0], 'year') or 'datetime' in str(type(ti[0])).lower()
                             plt.xlabel('Date' if is_date else 'Sample Index')
-                            
                             plt.ylabel('Class Label')
                             plt.legend()
                             plt.gcf().autofmt_xdate()
@@ -698,13 +746,14 @@ def data_analyzer(
                         except Exception as e:
                             print(f"Could not plot classification predictions: {e}")
 
-                # Display top features for the first model (RF)
                 if 'rf_importances' in results_trees:
                     top_features = sorted(results_trees['rf_importances'].items(), key=lambda x: x[1], reverse=True)[:5]
                     print(f"Top 5 Features ({task}): {top_features}")
 
             except Exception as e:
                 print(f"Error running tree training pipeline for {task}: {e}")
+
+    return results
 
 if __name__ == '__main__':
     import argparse
@@ -713,6 +762,7 @@ if __name__ == '__main__':
     parser.add_argument('json_path', nargs='?', default=os.path.join(os.path.dirname(__file__), 'preprocessed_1727.json'), help='Path to preprocessed JSON file')
     parser.add_argument('--start_date', dest='start_date', help='Filter start date (YYYY-MM-DD)', default=None)
     parser.add_argument('--end_date', dest='end_date', help='Filter end date (YYYY-MM-DD)', default=None)
+    parser.add_argument('--pred_date', dest='pred_date', help='Date to start prediction splitting (YYYY-MM-DD)', default=None)
     parser.add_argument('--day_shift', dest='day_shift', type=int, default=-1, help='Number of days to shift for target_close (default: -1, next day)')
     parser.add_argument('--show_plots', '--show-plots', action='store_true', dest='show_plots', help='Display plots (default: True)')
     parser.add_argument('--no_plots', '--no-plots', action='store_false', dest='show_plots', help='Suppress all plots')
@@ -724,7 +774,8 @@ if __name__ == '__main__':
             args.json_path,
             start_date=args.start_date,
             end_date=args.end_date,
-            day_shift=args.day_shift
+            day_shift=args.day_shift,
+            pred_date=args.pred_date
         )
     except FileNotFoundError as e:
         print(e)
@@ -759,5 +810,5 @@ if __name__ == '__main__':
 
     print('\n'+'='*35)
     print("Start Data Analysis")
-    data_analyzer(results['df_metric'], run_trees=False, show_plots=args.show_plots)
+    data_analyzer(results['df_metric'], run_trees=False, show_plots=args.show_plots, pred_date=args.pred_date)
     print(f"\n\nFiltered date range: {start_date} -> {end_date}")
