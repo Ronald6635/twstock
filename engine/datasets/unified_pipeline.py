@@ -22,6 +22,7 @@ Architecture notes:
 from __future__ import annotations
 
 import os
+os.environ["KERAS_BACKEND"] = "torch"
 import sys
 from typing import Any, Dict, List, Optional, Union, Literal
 import numpy as np
@@ -359,7 +360,8 @@ class UnifiedPipeline:
             use_lstm=True,  # Use LSTM for time series
             x_train_idx=train_idx,
             x_test_idx=test_idx,
-            show_plots=self.show_plots
+            show_plots=self.show_plots,
+            tune_hyperparams=True
         )
     
     # =============================================================================
@@ -539,11 +541,12 @@ class UnifiedPipeline:
 
         # Add Chinese indicator explanations as requested
         summary.append("\n指標解釋:")
-        summary.append("- R² (決定係數): 衡量模型解釋資料變異的比例。值越接近1.0越好；負值表示模型表現比簡單平均差。")
-        summary.append("- MAE (平均絕對誤差): 預測值與實際值之間的平均絕對差異。值越小表示準確度越高。")
-        summary.append("- Ensemble Total Return: 基於整體預測在測試期間的累計百分比回報。")
-        summary.append("- Ensemble Sharpe: 風險調整後的回報指標（越高越好，年化近似值）。")
-        summary.append("- Ensemble Win Rate: 預測方向（上漲/下跌）與實際價格變動相符的比例。")
+        summary.append("- R² (決定係數): 衡量模型解釋資料變異的比例。值範圍通常為負無限到1；越接近1越好，負值表示模型比使用平均值預測還差。")
+        summary.append("- MAE (平均絕對誤差): 預測值與實際值之間的平均絕對差異；單位與目標相同，值越小代表預測越準確。")
+        summary.append("- Deep Learning R / MAE: 深度學習模型使用上述兩項指標，檔案中以 'Deep Learning R' 與 'Deep Learning MAE' 呈現。")
+        summary.append("- Ensemble Total Return (整體累計報酬): 根據模型預測在測試期間計算的累積百分比報酬（簡化計算）。")
+        summary.append("- Ensemble Sharpe (夏普比率): 風險調整後的回報指標（簡化為平均日回報除以日回報標準差再年化），數值越高越好。")
+        summary.append("- Ensemble Win Rate (方向正確率): 模型預測變化方向（上漲/下跌）與實際價格變動方向相符的比例，範圍 0-1。")
 
         return "\n".join(summary)
 
@@ -573,6 +576,10 @@ def main() -> None:
     parser.add_argument("--show_plots", "--show-plots", action="store_true", dest="show_plots", help="Display plots for model results")
     parser.add_argument("--no_plots", "--no-plots", action="store_false", dest="show_plots", help="Suppress all plots")
     parser.set_defaults(show_plots=True)
+    # Model type selection
+    parser.add_argument("--model_types", "--model-types", type=str, nargs="+",
+                        help="List of model types to run: traditional, trees, deep_learning",
+                        default=["traditional", "trees", "deep_learning"])
     
     args = parser.parse_args()
     

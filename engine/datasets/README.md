@@ -11,17 +11,17 @@ This folder contains utility scripts for processing, analyzing, and machine lear
 - `dict.md`: Field name dictionary for data columns
 
 ### Machine Learning Models
-- `unified_pipeline.py`: **NEW** Unified ML pipeline integrating all models with TimeSeriesSplit cross-validation
+- `unified_pipeline.py`: **NEW** Unified ML pipeline integrating all models with TimeSeriesSplit cross-validation (uses PyTorch backend for DL)
 - `ml_model.py`: Traditional ML models (Linear Regression, SVR, Random Forest, SVC) with hyperparameter tuning
 - `train_trees.py`: Time-series optimized tree-based models (Random Forest, Gradient Boosting, LightGBM)
-- `dl_model.py`: Deep learning models (LSTM, Dense networks) with Bayesian hyperparameter optimization
+- `dl_model.py`: Deep learning models (LSTM, Dense networks) using Keras 3 with PyTorch backend
 
 ## Installation
 
 Install required dependencies for machine learning features:
 
 ```bash
-pip install scikit-learn scikit-optimize tensorflow pandas numpy matplotlib
+pip install scikit-learn scikit-optimize torch torchvision keras pandas numpy matplotlib
 ```
 
 ## Usage Examples

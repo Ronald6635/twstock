@@ -131,3 +131,4 @@ engine/datasets/*/*.html
 .github/
 engine/datasets/best_model.*
 examples/
+engine/datasets/results.json

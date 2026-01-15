@@ -21,6 +21,7 @@ Architecture notes:
 from __future__ import annotations
 
 import os
+os.environ["KERAS_BACKEND"] = "torch"
 import sys
 import json
 import pandas as pd
@@ -491,11 +492,13 @@ def data_analyzer(
             continue
         corr = np.corrcoef(feature, y_series.values)[0, 1]
         print(f"Correlation between '{target_col}' and '{col}': {corr:.4f}")
-        if abs(corr) > 0.05:  # Lowered threshold for feature selection
+        if abs(corr) > 0.1:  # Lowered threshold for feature selection
             sel_feature.append(col)
     
+    excluded = ['SMA_5', 'SMA_20'] # exclude features known to cause overfitting
+    sel_feature = [f for f in sel_feature if f not in excluded] # filter excluded features
+
     X = df[sel_feature].to_numpy() if sel_feature else df.drop(columns=[target_col]).to_numpy()
-    
     print(f"Converted Metric DataFrame to numpy arrays: X shape {X.shape}, y shape {y_series.size}")
     print(f"Selected features for model fitting: {sel_feature}")
 

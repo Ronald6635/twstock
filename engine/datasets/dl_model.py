@@ -1,7 +1,7 @@
 """
 Deep Learning Model Module
 
-This module implements deep learning models for stock price prediction using TensorFlow/Keras.
+This module implements deep learning models for stock price prediction using Keras with PyTorch backend.
 It provides functions to train, evaluate, and visualize neural network models on financial data.
 
 Key features:
@@ -11,12 +11,15 @@ Key features:
 - Visualization of predictions vs actual values
 
 Architecture notes:
-- Uses TensorFlow/Keras for neural network implementation
+- Uses Keras 3 with PyTorch for backend execution
 - Designed for time series prediction with tabular financial features
 - Includes hyperparameter tuning and model persistence options
 """
 
 import os
+os.environ["KERAS_BACKEND"] = "torch"
+import keras
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -24,19 +27,18 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Sequence
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
-# Import TensorFlow with fallback for environments without GPU support
+# Import Keras with multi-backend support
 try:
-    import tensorflow as tf
-    from tensorflow.keras.models import Sequential, Model
-    from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, LSTM, Input, concatenate, Flatten
-    from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-    from tensorflow.keras.optimizers import Adam
-    from tensorflow.keras.losses import MeanSquaredError
-    from tensorflow.keras.metrics import MeanAbsoluteError
+    from keras.models import Sequential, Model
+    from keras.layers import Dense, Dropout, BatchNormalization, LSTM, Input, concatenate, Flatten
+    from keras.callbacks import EarlyStopping, ModelCheckpoint
+    from keras.optimizers import Adam
+    from keras.losses import MeanSquaredError
+    from keras.metrics import MeanAbsoluteError
 except ImportError as e:
     raise ImportError(
-        "TensorFlow is required for deep learning models. "
-        "Install it with: pip install tensorflow"
+        "Keras is required for deep learning models. "
+        "Install it with: pip install keras"
     ) from e
 
 # Import scikit-optimize for hyperparameter tuning
@@ -60,6 +62,75 @@ def create_sequences(data, target, sequence_length=60):
         X.append(data[i:(i + sequence_length)])
         y.append(target[i + sequence_length])
     return np.array(X), np.array(y)
+
+
+def _build_wide_deep_model(
+    input_shape: Union[Tuple[int, ...], Tuple[int, int]],
+    hidden_layers: Sequence[int],
+    dropout_rate: float,
+    final_dense_units: int = 64,
+    l2_reg: float = 1e-4,
+    use_lstm: bool = True,
+    activation: str = 'relu'
+) -> Model:
+    """
+    Build a Wide & Deep functional Keras model matching the topology used in `models()`.
+
+    Args:
+        input_shape: Input shape tuple. For LSTM this is (seq_len, n_features),
+            for Dense this is (n_features,).
+        hidden_layers: Sequence of integers for hidden/dense sizes.
+        dropout_rate: Dropout rate applied after layers.
+        final_dense_units: Units in the merged dense layer.
+        l2_reg: L2 regularization strength for final dense layer.
+        use_lstm: Whether to build LSTM (True) or Dense (False) deep path.
+
+    Returns:
+        Keras Model (uncompiled)
+    """
+    inputs = Input(shape=input_shape)
+    if use_lstm:
+        # Use up to two layers for LSTM stack; if only one provided, reuse it
+        if len(hidden_layers) >= 2:
+            lstm_0, lstm_1 = hidden_layers[0], hidden_layers[1]
+        else:
+            lstm_0 = lstm_1 = hidden_layers[0]
+        x = LSTM(lstm_0, return_sequences=True)(inputs)
+        x = Dropout(dropout_rate)(x)
+        x = LSTM(lstm_1, return_sequences=False)(x)
+        x = Dropout(dropout_rate)(x)
+        deep = x
+        wide = Flatten()(inputs)
+    else:
+        x = Dense(hidden_layers[0], activation=activation)(inputs)
+        x = BatchNormalization()(x)
+        x = Dropout(dropout_rate)(x)
+        for units in hidden_layers[1:]:
+            x = Dense(units, activation=activation)(x)
+            x = BatchNormalization()(x)
+            x = Dropout(dropout_rate)(x)
+        deep = x
+        wide = inputs
+
+    merged = concatenate([deep, wide])
+    # ensure final_dense_units is a native Python int and positive
+    final_dense_units = int(final_dense_units)
+    if final_dense_units <= 0:
+        raise ValueError(f"final_dense_units must be a positive integer, got {final_dense_units!r}")
+
+    merged_hidden = Dense(
+        final_dense_units,
+        activation=activation,
+        kernel_initializer='he_normal',
+        kernel_regularizer=keras.regularizers.L2(l2_reg),
+        name='final_dense'
+    )(merged)
+    merged_hidden = BatchNormalization(name='final_bn')(merged_hidden)
+    merged_hidden = Dropout(dropout_rate, name='final_dropout')(merged_hidden)
+    output = Dense(1, activation='linear', name='output')(merged_hidden)
+    model = Model(inputs=inputs, outputs=output)
+    return model
+
 
 def hyperparameter_search(
     X_train: np.ndarray,
@@ -97,12 +168,17 @@ def hyperparameter_search(
         "128,64,32": (128, 64, 32)
     }
 
-    # Define search space using string labels
+    # Define search space using string labels and additional parameters
     space = [
         Real(1e-4, 1e-2, prior='log-uniform', name='learning_rate'),
         Real(0.1, 0.5, name='dropout_rate'),
         Integer(16, 64, name='batch_size'),
-        Categorical(list(layer_map.keys()), name='hidden_layers')
+        Categorical(list(layer_map.keys()), name='hidden_layers'),
+        # Additional tunables
+        Integer(16, 256, name='final_dense_units'),
+        Real(1e-6, 1e-2, prior='log-uniform', name='l2_reg'),
+        Categorical(['relu', 'elu'], name='activation'),
+        Categorical(['adam', 'rmsprop'], name='optimizer')
     ]
     
     @use_named_args(space)
@@ -116,8 +192,8 @@ def hyperparameter_search(
         Returns:
             float: The value to minimize (e.g., negative R² score).
         """
-        # Clear the Keras session to prevent graph accumulation and tf.function retracing
-        tf.keras.backend.clear_session()
+        # Clear the Keras session to prevent memory accumulation in the backend
+        keras.backend.clear_session()
 
         # Map the string label back to the tuple configuration
         actual_layers = layer_map[params['hidden_layers']]
@@ -156,28 +232,26 @@ def hyperparameter_search(
             X_test_final, y_test_final = X_test_scaled, y_test_s
             y_test_actual = y_test
         
-        # Build model
-        model = Sequential()
-        if use_lstm:
-            layers = actual_layers[:2]  # Use first two layers for LSTM
-            model.add(Input(shape=(X_train_final.shape[1], X_train_final.shape[2])))
-            model.add(LSTM(layers[0], return_sequences=True))
-            model.add(Dropout(params['dropout_rate']))
-            if len(layers) > 1:
-                model.add(LSTM(layers[1], return_sequences=False))
-                model.add(Dropout(params['dropout_rate']))
+        # Build Wide & Deep functional model (match models() topology)
+        # Ensure defaults for final merged dense layer and regularization during tuning
+        config.setdefault('final_dense_units', 64)
+        config.setdefault('l2_reg', 1e-4)
+        # Build model using sampled hyperparameters
+        input_shape = (X_train_final.shape[1], X_train_final.shape[2]) if use_lstm else (X_train_final.shape[1],)
+        model = _build_wide_deep_model(
+            input_shape=input_shape,
+            hidden_layers=actual_layers,
+            dropout_rate=params['dropout_rate'],
+            final_dense_units=params.get('final_dense_units', config['final_dense_units']),
+            l2_reg=params.get('l2_reg', config['l2_reg']),
+            use_lstm=use_lstm,
+            activation=params.get('activation', 'relu')
+        )
+        # Select optimizer
+        if params.get('optimizer', 'adam') == 'adam':
+            optimizer = Adam(learning_rate=params['learning_rate'])
         else:
-            model.add(Input(shape=(X_train_final.shape[1],)))
-            model.add(Dense(params['hidden_layers'][0], activation='relu'))
-            model.add(BatchNormalization())
-            model.add(Dropout(params['dropout_rate']))
-            for units in params['hidden_layers'][1:]:
-                model.add(Dense(units, activation='relu'))
-                model.add(BatchNormalization())
-                model.add(Dropout(params['dropout_rate']))
-        model.add(Dense(1, activation='linear'))
-        
-        optimizer = Adam(learning_rate=params['learning_rate'])
+            optimizer = keras.optimizers.RMSprop(learning_rate=params['learning_rate'])
         model.compile(optimizer=optimizer, loss=MeanSquaredError(), metrics=[MeanAbsoluteError()])
         
         early_stopping = EarlyStopping(monitor='val_loss', patience=config['patience'], restore_best_weights=True, verbose=0)
@@ -200,7 +274,12 @@ def hyperparameter_search(
         'dropout_rate': res.x[1],
         'batch_size': res.x[2],
         # map the best string result back to a list
-        'hidden_layers': list(layer_map[res.x[3]])
+        'hidden_layers': list(layer_map[res.x[3]]),
+        # Additional params
+        'final_dense_units': res.x[4],
+        'l2_reg': res.x[5],
+        'activation': res.x[6],
+        'optimizer': res.x[7]
     }
     
     return best_params
@@ -254,7 +333,11 @@ def models(
         'epochs': 200,
         'patience': 20,
         'validation_split': 0.1,
-        'sequence_length': 30
+        'sequence_length': 30,
+        # Number of units in the final merged dense layer
+        'final_dense_units': 64,
+        # Optional L2 regularization strength for final dense layer
+        'l2_reg': 1e-4
     }
     config = {**default_config, **(model_config or {})}
     
@@ -263,6 +346,17 @@ def models(
         print("Performing hyperparameter tuning with Bayesian optimization...")
         best_config = hyperparameter_search(X_train, y_train, X_test, y_test, use_lstm, config['sequence_length'])
         config.update(best_config)
+        
+        # Ensure integer hyperparameters are cast to standard Python ints
+        int_params: List[str] = ['batch_size', 'final_dense_units', 'epochs', 'patience']
+        for param in int_params:
+            if param in config:
+                config[param] = int(config[param])
+        
+        # Handle hidden_layers list if present
+        if 'hidden_layers' in config:
+            config['hidden_layers'] = [int(layer) for layer in config['hidden_layers']]
+
         print(f"Best hyperparameters found: {best_config}")
     
     # Scale features
@@ -303,39 +397,16 @@ def models(
         y_test_actual = y_test
         x_test_idx_actual = x_test_idx
 
-    # Build model using Functional API with Wide & Deep topology
+    # Build model using helper that implements the Wide & Deep topology
     input_shape = (X_train_final.shape[1], X_train_final.shape[2]) if use_lstm else (X_train_final.shape[1],)
-    inputs = Input(shape=input_shape)
-    
-    # Deep path logic
-    if use_lstm:
-        # LSTM stack for capturing complex temporal patterns
-        x = LSTM(config['hidden_layers'][0], return_sequences=True)(inputs)
-        x = Dropout(config['dropout_rate'])(x)
-        deep = LSTM(config['hidden_layers'][1], return_sequences=False)(x)
-        deep = Dropout(config['dropout_rate'])(deep)
-        
-        # Wide path: Flatten sequences to capture simple linear features across time steps
-        wide = Flatten()(inputs)
-    else:
-        # Dense stack for capturing non-linear interactions between features
-        x = Dense(config['hidden_layers'][0], activation='relu')(inputs)
-        x = BatchNormalization()(x)
-        x = Dropout(config['dropout_rate'])(x)
-        for units in config['hidden_layers'][1:]:
-            x = Dense(units, activation='relu')(x)
-            x = BatchNormalization()(x)
-            x = Dropout(config['dropout_rate'])(x)
-        deep = x
-        
-        # Wide path: Direct linear connection from input features
-        wide = inputs
-    
-    # Merge Wide & Deep paths
-    merged = concatenate([deep, wide])
-    output = Dense(1, activation='linear')(merged)
-    
-    model = Model(inputs=inputs, outputs=output)
+    model = _build_wide_deep_model(
+        input_shape=input_shape,
+        hidden_layers=config['hidden_layers'],
+        dropout_rate=config['dropout_rate'],
+        final_dense_units=config['final_dense_units'],
+        l2_reg=config['l2_reg'],
+        use_lstm=use_lstm
+    )
     
     # Compile model
     optimizer = Adam(learning_rate=config['learning_rate'])
@@ -456,7 +527,7 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
     plt.show()
 
 
-def _plot_training_history(history: tf.keras.callbacks.History) -> None:
+def _plot_training_history(history: keras.callbacks.History) -> None:
     """
     Plot training and validation loss curves.
     
