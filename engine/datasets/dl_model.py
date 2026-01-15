@@ -132,6 +132,27 @@ def _build_wide_deep_model(
     return model
 
 
+def _select_optimizer(name: Optional[str], lr: float):
+    """
+    Return a Keras optimizer instance given a name and learning rate.
+
+    Args:
+        name: Optimizer name (case-insensitive): 'adam', 'sgd', or 'rmsprop'.
+        lr: Learning rate float.
+
+    Returns:
+        An instantiated Keras optimizer.
+    """
+    name = (name or 'adam').lower()
+    if name == 'adam':
+        return Adam(learning_rate=lr)
+    if name == 'sgd':
+        return keras.optimizers.SGD(learning_rate=lr)
+    if name in ('rmsprop', 'rms'):
+        return keras.optimizers.RMSprop(learning_rate=lr)
+    raise ValueError(f"Unknown optimizer: {name!r}")
+
+
 def hyperparameter_search(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -165,7 +186,10 @@ def hyperparameter_search(
         "64,32,16": (64, 32, 16),
         "128": (128,),
         "128,64": (128, 64),
-        "128,64,32": (128, 64, 32)
+        "128,64,32": (128, 64, 32),
+        "256": (256,),
+        "256,128": (256, 128),
+        "256,128,64": (256, 128, 64)
     }
 
     # Define search space using string labels and additional parameters
@@ -178,7 +202,7 @@ def hyperparameter_search(
         Integer(16, 256, name='final_dense_units'),
         Real(1e-6, 1e-2, prior='log-uniform', name='l2_reg'),
         Categorical(['relu', 'elu'], name='activation'),
-        Categorical(['adam', 'rmsprop'], name='optimizer')
+        Categorical(['adam', 'rmsprop', 'sgd'], name='optimizer')
     ]
     
     @use_named_args(space)
@@ -204,7 +228,7 @@ def hyperparameter_search(
             'dropout_rate': params['dropout_rate'],
             'learning_rate': params['learning_rate'],
             'batch_size': params['batch_size'],
-            'epochs': 50,  # Reduced for tuning
+            'epochs': 100,  # Reduced for tuning
             'patience': 10,
             'validation_split': 0.1,
             'sequence_length': sequence_length
@@ -248,10 +272,7 @@ def hyperparameter_search(
             activation=params.get('activation', 'relu')
         )
         # Select optimizer
-        if params.get('optimizer', 'adam') == 'adam':
-            optimizer = Adam(learning_rate=params['learning_rate'])
-        else:
-            optimizer = keras.optimizers.RMSprop(learning_rate=params['learning_rate'])
+        optimizer = _select_optimizer(params.get('optimizer', 'adam'), params['learning_rate'])
         model.compile(optimizer=optimizer, loss=MeanSquaredError(), metrics=[MeanAbsoluteError()])
         
         early_stopping = EarlyStopping(monitor='val_loss', patience=config['patience'], restore_best_weights=True, verbose=0)
@@ -267,7 +288,7 @@ def hyperparameter_search(
             return 1.0  # Return high loss for failed configurations
     
     # Run optimization
-    res = gp_minimize(objective, space, n_calls=n_calls, random_state=42)
+    res = gp_minimize(objective, space, n_calls=n_calls, random_state=42, n_jobs=-1)
     
     best_params = {
         'learning_rate': res.x[0],
@@ -337,7 +358,8 @@ def models(
         # Number of units in the final merged dense layer
         'final_dense_units': 64,
         # Optional L2 regularization strength for final dense layer
-        'l2_reg': 1e-4
+        'l2_reg': 1e-4,
+        'optimizer': 'adam'
     }
     config = {**default_config, **(model_config or {})}
     
@@ -409,7 +431,7 @@ def models(
     )
     
     # Compile model
-    optimizer = Adam(learning_rate=config['learning_rate'])
+    optimizer = _select_optimizer(config.get('optimizer', 'adam'), config['learning_rate'])
     model.compile(
         optimizer=optimizer,
         loss=MeanSquaredError(),
@@ -502,7 +524,7 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
     if x_idx is not None:
         try:
             ax2.plot(x_idx, y_true, '.-', label='Actual', color='blue', alpha=0.7)
-            ax2.plot(x_idx, y_pred, label='Predicted', color='red', alpha=0.7)
+            ax2.plot(x_idx, y_pred, '--', label='Predicted', color='red', alpha=0.7)
             
             # Robust check for datetime type to determine axis label
             is_date = isinstance(x_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_idx, 'dtype', '')).lower()
@@ -515,11 +537,11 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
             # HACK: Fallback to sample index if provided x_idx is incompatible with matplotlib plot
             print(f"Time series plot error: {e}")
             ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
-            ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
+            ax2.plot(y_pred, '--', label='Predicted', color='red', alpha=0.7)
             ax2.set_xlabel('Sample Index')
     else:
         ax2.plot(y_true, '.-', label='Actual', color='blue', alpha=0.7)
-        ax2.plot(y_pred, label='Predicted', color='red', alpha=0.7)
+        ax2.plot(y_pred, '--', label='Predicted', color='red', alpha=0.7)
         ax2.set_xlabel('Sample Index')
 
     ax2.set_ylabel('Close Price')

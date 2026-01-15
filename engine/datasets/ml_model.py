@@ -139,7 +139,7 @@ def regression_models(
         plt.figure(figsize=(8, 6))
         # Use provided test indices for x-axis if available (better date labels)
         if safe_x_test_idx is not None:
-            plt.plot(safe_x_test_idx, y_pred_lr, label='Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_pred_lr, '--', label='Predicted', alpha=0.7)
             plt.plot(safe_x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
             is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
             if not is_date and len(safe_x_test_idx) > 0:
@@ -147,7 +147,7 @@ def regression_models(
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
-            plt.plot(y_pred_lr, label='Predicted', alpha=0.7)
+            plt.plot(y_pred_lr, '--', label='Predicted', alpha=0.7)
             plt.plot(y_test, '.-', label='Actual', alpha=0.7)
             plt.xlabel('Sample Index')
         plt.ylabel('Close Price')
@@ -180,7 +180,7 @@ def regression_models(
     if show_plots:
         plt.figure(figsize=(8, 6))
         if safe_x_test_idx is not None:
-            plt.plot(safe_x_test_idx, y_pred_svr, label='SVR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_pred_svr, '--', label='SVR Predicted', alpha=0.7)
             plt.plot(safe_x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
             is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
             if not is_date and len(safe_x_test_idx) > 0:
@@ -188,7 +188,7 @@ def regression_models(
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
-            plt.plot(y_pred_svr, label='SVR Predicted', alpha=0.7)
+            plt.plot(y_pred_svr, '--', label='SVR Predicted', alpha=0.7)
             plt.plot(y_test, '.-', label='Actual', alpha=0.7)
             plt.xlabel('Sample Index')
         plt.ylabel('Close Price')
@@ -204,8 +204,8 @@ def regression_models(
     if show_plots:
         plt.figure(figsize=(8, 6))
         if safe_x_test_idx is not None:
-            plt.plot(safe_x_test_idx, y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
-            plt.plot(safe_x_test_idx, y_pred_svr, 'g',label='SVR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_pred_lr, 'r--', label='LR Predicted', alpha=0.7)
+            plt.plot(safe_x_test_idx, y_pred_svr, 'g--',label='SVR Predicted', alpha=0.7)
             plt.plot(safe_x_test_idx, y_test, 'b.-', label='Actual', alpha=0.7)
             is_date = isinstance(safe_x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(safe_x_test_idx, 'dtype', '')).lower()
             if not is_date and len(safe_x_test_idx) > 0:
@@ -213,8 +213,8 @@ def regression_models(
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
-            plt.plot(y_pred_lr, 'r', label='LR Predicted', alpha=0.7)
-            plt.plot(y_pred_svr, 'g',label='SVR Predicted', alpha=0.7)
+            plt.plot(y_pred_lr, 'r--', label='LR Predicted', alpha=0.7)
+            plt.plot(y_pred_svr, 'g--',label='SVR Predicted', alpha=0.7)
             plt.plot(y_test, 'b.-', label='Actual', alpha=0.7)
             plt.xlabel('Sample Index')
         plt.ylabel('Close Price')
@@ -373,7 +373,7 @@ def classification_models(
         pred_vals = best_model_data['model'].predict(X_test_scaled)
         # Use datetime x-axis if provided
         if x_test_idx is not None:
-            plt.plot(x_test_idx, pred_vals, label='Predicted', alpha=0.7)
+            plt.plot(x_test_idx, pred_vals, '--', label='Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test_cls, '.-', label='Actual', alpha=0.7)
             is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
             if not is_date and len(x_test_idx) > 0:
@@ -381,7 +381,7 @@ def classification_models(
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
-            plt.plot(pred_vals, label='Predicted', alpha=0.7)
+            plt.plot(pred_vals, '--', label='Predicted', alpha=0.7)
             plt.plot(y_test_cls, '.-', label='Actual', alpha=0.7)
             plt.xlabel('Sample Index')
         plt.ylabel('Class Label')
@@ -393,7 +393,7 @@ def classification_models(
         plt.title(f'Predictions by {best_model_name}')
         pred_price_vals = y_train[best_model_data['model'].predict(X_test_scaled)]
         if x_test_idx is not None:
-            plt.plot(x_test_idx, pred_price_vals, label='Predicted', alpha=0.7)
+            plt.plot(x_test_idx, pred_price_vals, '--', label='Predicted', alpha=0.7)
             plt.plot(x_test_idx, y_test, '.-', label='Actual', alpha=0.7)
             is_date = isinstance(x_test_idx, pd.DatetimeIndex) or 'datetime' in str(getattr(x_test_idx, 'dtype', '')).lower()
             if not is_date and len(x_test_idx) > 0:
@@ -401,7 +401,7 @@ def classification_models(
             plt.xlabel('Date' if is_date else 'Sample Index')
             plt.gcf().autofmt_xdate()
         else:
-            plt.plot(pred_price_vals, label='Predicted', alpha=0.7)
+            plt.plot(pred_price_vals, '--', label='Predicted', alpha=0.7)
             plt.plot(y_test, '.-', label='Actual', alpha=0.7)
             plt.xlabel('Sample Index')
         plt.ylabel('Price')

@@ -425,8 +425,8 @@ class UnifiedPipeline:
                 
                 plt.figure(figsize=(12, 6))
                 plt.plot(ti, y_test_vals, '.-', label='Actual', color='black', alpha=0.8)
-                plt.plot(ti, y_pred_rf, label='RF Predicted', color='tab:blue', alpha=0.8)
-                plt.plot(ti, y_pred_gb, label='GB Predicted', color='tab:orange', alpha=0.8)
+                plt.plot(ti, y_pred_rf, '--', label='RF Predicted', color='tab:blue', alpha=0.8)
+                plt.plot(ti, y_pred_gb, '--', label='GB Predicted', color='tab:orange', alpha=0.8)
                 
                 plt.title(f'Tree Model Predictions vs Actual ({self.task.upper()})')
                 plt.xlabel('Date' if isinstance(ti, pd.DatetimeIndex) else 'Sample Index')
@@ -541,7 +541,7 @@ class UnifiedPipeline:
 
                 plt.figure(figsize=(12, 6))
                 plt.plot(x_idx, y_test_aligned, '.-', label='Actual', color='black', alpha=0.8)
-                plt.plot(x_idx, ensemble_preds, label='Ensemble Predicted', color='tab:purple', linewidth=2, alpha=0.9)
+                plt.plot(x_idx, ensemble_preds, '--', label='Ensemble Predicted', color='tab:purple', linewidth=2, alpha=0.9)
 
                 plt.title(f'Ensemble Model Predictions vs Actual ({self.task.upper()})')
 
@@ -645,14 +645,6 @@ class UnifiedPipeline:
             summary.append(f"Ensemble Sharpe: {self._safe_format(metrics.get('sharpe', 'N/A'))}")
             summary.append(f"Ensemble Win Rate: {self._safe_format(metrics.get('win_rate', 'N/A'))}")
 
-        # Add Features used for prediction
-        if 'metadata' in self.results and 'feature_columns' in self.results['metadata']:
-            summary.append("\nFeatures Used for Prediction:")
-            summary.append("-" * 30)
-            feat_list = self.results['metadata']['feature_columns']
-            for i, feat in enumerate(feat_list, 1):
-                summary.append(f"{i}. {feat}")
-
         # Add Chinese indicator explanations as requested
         summary.append("\n指標解釋:")
         summary.append("- R² (決定係數): 衡量模型解釋資料變異的比例。值範圍通常為負無限到1；越接近1越好，負值表示模型比使用平均值預測還差。")
@@ -661,6 +653,14 @@ class UnifiedPipeline:
         summary.append("- Ensemble Total Return (整體累計報酬): 根據模型預測在測試期間計算的累積百分比報酬（簡化計算）。")
         summary.append("- Ensemble Sharpe (夏普比率): 風險調整後的回報指標（簡化為平均日回報除以日回報標準差再年化），數值越高越好。")
         summary.append("- Ensemble Win Rate (方向正確率): 模型預測變化方向（上漲/下跌）與實際價格變動方向相符的比例，範圍 0-1。")
+
+        # Add Features used for prediction
+        if 'metadata' in self.results and 'feature_columns' in self.results['metadata']:
+            summary.append("\nFeatures Used for Prediction:")
+            summary.append("-" * 30)
+            feat_list = self.results['metadata']['feature_columns']
+            for i, feat in enumerate(feat_list, 1):
+                summary.append(f"{i}. {feat}")
 
         return "\n".join(summary)
 
@@ -759,7 +759,7 @@ def main() -> None:
     with open(args.output, "w") as f:
         json.dump(results, f, indent=4, default=str)
     
-    print(f"Results saved to {args.output}")
+    print(f"\nResults saved to {args.output}")
 
 if __name__ == "__main__":
     main()

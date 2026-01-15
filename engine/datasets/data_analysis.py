@@ -710,9 +710,9 @@ def data_analyzer(
                             plt.figure(figsize=(12, 6))
                             plt.plot(ti, y_test_vals, '.-', label='Actual', color='black', alpha=0.8)
                             if y_pred_rf is not None:
-                                plt.plot(ti, y_pred_rf, label='RF Predicted', color='tab:blue', alpha=0.8)
+                                plt.plot(ti, y_pred_rf, '--',label='RF Predicted', color='tab:blue', alpha=0.8)
                             if y_pred_gb is not None:
-                                plt.plot(ti, y_pred_gb, label='GB Predicted', color='tab:orange', alpha=0.8)
+                                plt.plot(ti, y_pred_gb, '--', label='GB Predicted', color='tab:orange', alpha=0.8)
                             plt.title(f'Tree Model Predictions vs Actual ({task.upper()})')
                             is_date = isinstance(ti, pd.DatetimeIndex) or 'datetime' in str(getattr(ti, 'dtype', '')).lower()
                             if not is_date and ti is not None and len(ti) > 0:
