@@ -27,6 +27,7 @@ def _insert_minimal_keras_stub():
         setattr(sys.modules['keras.layers'], sym, lambda *a, **k: None)
     sys.modules['keras.callbacks'].EarlyStopping = lambda *a, **k: None
     sys.modules['keras.callbacks'].ModelCheckpoint = lambda *a, **k: None
+    sys.modules['keras.callbacks'].History = type('History', (), {})
     sys.modules['keras.optimizers'].Adam = lambda *a, **k: None
     sys.modules['keras.losses'].MeanSquaredError = lambda *a, **k: None
     sys.modules['keras.metrics'].MeanAbsoluteError = lambda *a, **k: None
