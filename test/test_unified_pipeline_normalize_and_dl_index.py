@@ -25,6 +25,7 @@ def _insert_minimal_stubs():
         setattr(sys.modules['keras.layers'], sym, lambda *a, **k: None)
     sys.modules['keras.callbacks'].EarlyStopping = lambda *a, **k: None
     sys.modules['keras.callbacks'].ModelCheckpoint = lambda *a, **k: None
+    sys.modules['keras.callbacks'].History = type('History', (), {})
     sys.modules['keras.optimizers'].Adam = lambda *a, **k: None
     sys.modules['keras.optimizers'].SGD = lambda *a, **k: None
     sys.modules['keras.optimizers'].RMSprop = lambda *a, **k: None
