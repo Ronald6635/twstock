@@ -8,58 +8,105 @@ import matplotlib.pyplot as plt
 import pytest
 
 # --- Helpers to stub heavy deps so we can import modules that normally require Keras/skopt ---
-def _insert_minimal_keras_stub():
-    """Insert minimal 'keras' and submodules into sys.modules so importing dl_model/unified_pipeline succeeds."""
+def _insert_minimal_stubs():
+    """Insert minimal stubs for heavy dependencies."""
     import types
-    # top-level keras module
+    
+    # Keras
     km = types.ModuleType('keras')
     sys.modules['keras'] = km
-    # submodules that are imported at module level
-    for name in ('models', 'layers', 'callbacks', 'optimizers', 'losses', 'metrics', 'regularizers'):
+    for name in ('models', 'layers', 'callbacks', 'optimizers', 'losses', 'metrics', 'regularizers', 'backend'):
         m = types.ModuleType(f'keras.{name}')
         sys.modules[f'keras.{name}'] = m
         setattr(km, name, m)
-    # provide minimal symbols used at import time
     sys.modules['keras.models'].Sequential = lambda *a, **k: None
     sys.modules['keras.models'].Model = type('Model', (), {})
-    # layers (only names must exist)
     for sym in ('Dense', 'Dropout', 'BatchNormalization', 'LSTM', 'Input', 'concatenate', 'Flatten'):
         setattr(sys.modules['keras.layers'], sym, lambda *a, **k: None)
     sys.modules['keras.callbacks'].EarlyStopping = lambda *a, **k: None
     sys.modules['keras.callbacks'].ModelCheckpoint = lambda *a, **k: None
-    # minimal History type used by plotting helpers
-    class _HistoryStub:
-        def __init__(self):
-            self.history = {'loss': [], 'val_loss': []}
-    sys.modules['keras.callbacks'].History = _HistoryStub
     sys.modules['keras.optimizers'].Adam = lambda *a, **k: None
+    sys.modules['keras.optimizers'].SGD = lambda *a, **k: None
+    sys.modules['keras.optimizers'].RMSprop = lambda *a, **k: None
     sys.modules['keras.losses'].MeanSquaredError = lambda *a, **k: None
     sys.modules['keras.metrics'].MeanAbsoluteError = lambda *a, **k: None
     sys.modules['keras.regularizers'].L2 = lambda *a, **k: None
-
-
-def _insert_minimal_skopt_stub():
-    import types
+    sys.modules['keras.backend'].clear_session = lambda *a, **k: None
+    
+    # skopt
     sk = types.ModuleType('skopt')
     sys.modules['skopt'] = sk
     sp = types.ModuleType('skopt.space')
     sys.modules['skopt.space'] = sp
     ut = types.ModuleType('skopt.utils')
     sys.modules['skopt.utils'] = ut
-    # placeholders
     sk.gp_minimize = lambda *a, **k: None
     sp.Real = lambda *a, **k: None
     sp.Integer = lambda *a, **k: None
     sp.Categorical = lambda *a, **k: None
     ut.use_named_args = lambda *a, **k: (lambda f: f)
+    
+    # Stub out modules that unified_pipeline imports (fallback paths)
+    def _dummy_regression_models(X_train, y_train, X_test, y_test, **kw):
+        # Return dummy predictions matching y_test length
+        return {
+            'y_pred_lr': np.ones(len(y_test)) * 100,
+            'y_pred_svr': np.ones(len(y_test)) * 100,
+            'predictions': np.ones(len(y_test)) * 100,
+        }
+    ml_model_stub = types.ModuleType('ml_model')
+    sys.modules['ml_model'] = ml_model_stub
+    ml_model_stub.regression_models = _dummy_regression_models
+    ml_model_stub.classification_models = lambda *a, **k: {}
+    
+    train_trees_stub = types.ModuleType('train_trees')
+    sys.modules['train_trees'] = train_trees_stub
+    train_trees_stub.train_tree_models = lambda *a, **k: {}
+    
+    data_visual_stub = types.ModuleType('data_visual')
+    sys.modules['data_visual'] = data_visual_stub
+    data_visual_stub.load_json_data = lambda *a, **k: None
+    data_visual_stub.prepare_data_for_chart = lambda *a, **k: None
+    
+    data_analysis_stub = types.ModuleType('data_analysis')
+    sys.modules['data_analysis'] = data_analysis_stub
+    data_analysis_stub.prepare_analysis_data = lambda *a, **k: {'df_metric': pd.DataFrame()}
+    
+    indicators_stub = types.ModuleType('indicators')
+    sys.modules['indicators'] = indicators_stub
+    indicators_stub.compute_supertrend = lambda *a, **k: (pd.Series(), pd.Series())
+    
+    dl_model_stub = types.ModuleType('dl_model')
+    sys.modules['dl_model'] = dl_model_stub
+    
+    # Stub out data_analysis module (with proper path) to avoid the entire import chain
+    data_analysis = types.ModuleType('engine.datasets.data_analysis')
+    sys.modules['engine.datasets.data_analysis'] = data_analysis
+    data_analysis.prepare_analysis_data = lambda *a, **k: {'df_metric': pd.DataFrame()}
+    
+    # Stub out other modules that unified_pipeline imports
+    ml_model = types.ModuleType('engine.datasets.ml_model')
+    sys.modules['engine.datasets.ml_model'] = ml_model
+    ml_model.regression_models = _dummy_regression_models
+    ml_model.classification_models = lambda *a, **k: {}
+    
+    train_trees = types.ModuleType('engine.datasets.train_trees')
+    sys.modules['engine.datasets.train_trees'] = train_trees
+    train_trees.train_tree_models = lambda *a, **k: {}
+    
+    indicators = types.ModuleType('engine.datasets.indicators')
+    sys.modules['engine.datasets.indicators'] = indicators
+    indicators.compute_supertrend = lambda *a, **k: (pd.Series(), pd.Series())
 
 
 # Ensure stubs exist BEFORE importing the target modules
-_insert_minimal_keras_stub()
-_insert_minimal_skopt_stub()
+_insert_minimal_stubs()
 
-# Import modules under test
-from engine.datasets import unified_pipeline, dl_model
+# Import modules under test - dl_model separately first
+from engine.datasets import dl_model
+
+# Now import unified_pipeline
+from engine.datasets import unified_pipeline
 
 
 def make_sample_df(n=80):
