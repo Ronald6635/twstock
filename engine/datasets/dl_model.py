@@ -354,7 +354,7 @@ def models(
         'epochs': 200,
         'patience': 20,
         'validation_split': 0.1,
-        'sequence_length': 30,
+        'sequence_length': 30, # For LSTM models, number of time steps
         # Number of units in the final merged dense layer
         'final_dense_units': 64,
         # Optional L2 regularization strength for final dense layer
@@ -504,9 +504,18 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
 
     # NOTE: Validate that x_idx length matches scientific data to prevent plotting crashes
     if x_idx is not None and len(x_idx) != len(y_true):
-        # Identify 'gotcha': LSTM lookback often causes indices to be longer than predictions if not sliced
-        print(f"Warning: Index length ({len(x_idx)}) mismatch with data ({len(y_true)}). Disabling x_idx.")
-        x_idx = None
+        # Preferred behavior: allow passing the full test index and align by keeping the tail
+        # (LSTM lookback makes predictions shorter than the full test index). This is
+        # non‑breaking and more user friendly than fully disabling the x-axis.
+        try:
+            if len(x_idx) > len(y_true):
+                x_idx = x_idx[-len(y_true):]
+            else:
+                # shorter index (unexpected) — disable to avoid mislabeling
+                print(f"Warning: Index length ({len(x_idx)}) mismatch with data ({len(y_true)}). Disabling x_idx.")
+                x_idx = None
+        except Exception:
+            x_idx = None
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     

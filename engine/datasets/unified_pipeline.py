@@ -29,16 +29,18 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import r2_score, accuracy_score, classification_report
+from sklearn.preprocessing import StandardScaler
 
 # Import local modules
 try:
-    from . import ml_model, train_trees, dl_model, data_analysis
+    from . import ml_model, train_trees, dl_model, data_analysis, indicators
 except ImportError:
     # Fallback for direct execution
     import ml_model
     import train_trees
     import dl_model
     import data_analysis
+    import indicators
 
 __all__ = ["UnifiedPipeline"]
 class UnifiedPipeline:
@@ -166,6 +168,27 @@ class UnifiedPipeline:
         target_cols = ['target_close', 'Daily_Return']
         available_targets = [c for c in target_cols if c in df.columns]
         
+        # --- ADD: compute SuperTrend and expose as numeric feature(s) ---
+        try:
+            required = {"high", "low", "close"}
+            if required.issubset(df.columns):
+                st_series, st_dir = indicators.compute_supertrend(
+                    df,
+                    period=10,
+                    multiplier=3.0,
+                    high_col='high',
+                    low_col='low',
+                    close_col='close'
+                )
+
+                df['supertrend'] = st_series
+                df['supertrend_dir'] = st_dir.astype(int)
+
+            else:
+                print("Warning: missing high/low/close columns — skipping SuperTrend computation.")
+        except Exception as e:
+            print(f"Warning: could not compute SuperTrend indicator: {e}")
+        
         # Identify numeric feature columns (exclude targets, dates, metadata)
         excluded = set(target_cols) | {'close', 'open', 'high', 'low', 'date', 'stock_id', 'SMA_5', 'SMA_20'}
         self.feat_cols = [c for c in df.columns if c not in excluded and pd.api.types.is_numeric_dtype(df[c])]
@@ -192,7 +215,7 @@ class UnifiedPipeline:
         # Ensure temporal sorting
         if 'date' in df_cleaned.columns:
             df_cleaned = df_cleaned.sort_values('date')
-            
+
         return df_cleaned
 
     def run_pipeline(
@@ -201,6 +224,7 @@ class UnifiedPipeline:
         test_ratio: float = 0.2, 
         use_ensemble: bool = True,
         include_raw: bool = False,
+        normalize: bool = False,
         **preprocess_kwargs: Any
     ) -> Dict[str, Any]:
         """
@@ -274,7 +298,35 @@ class UnifiedPipeline:
         y_train = train_df[target_col].values
         X_test = test_df[feat_cols].values
         y_test = test_df[target_col].values
-        
+
+        # OPTIONAL: standardize numeric features (preserve binary/indicator cols)
+        normalize = preprocess_kwargs.get("normalize", normalize)
+        if normalize:
+            Xtr_df = train_df[feat_cols].copy()
+            Xte_df = test_df[feat_cols].copy()
+
+            # identify binary indicator features (nunique <= 2 and integer-like)
+            binary_feats = [
+                c for c in feat_cols
+                if Xtr_df[c].nunique(dropna=True) <= 2 and pd.api.types.is_integer_dtype(Xtr_df[c])
+            ]
+            numeric_feats = [c for c in feat_cols if c not in binary_feats]
+
+            if numeric_feats:
+                scaler = StandardScaler()
+                scaler.fit(Xtr_df[numeric_feats])
+                Xtr_df[numeric_feats] = scaler.transform(Xtr_df[numeric_feats])
+                Xte_df[numeric_feats] = scaler.transform(Xte_df[numeric_feats])
+
+                # overwrite numpy arrays used by downstream models
+                X_train = Xtr_df.values
+                X_test = Xte_df.values
+
+                # persist scaler & metadata for reproducibility
+                self.scaler = scaler
+                self._normalized_features = numeric_feats
+                self._excluded_from_normalization = binary_feats
+
         # 4. Results Metadata
         train_idx = train_df.index if isinstance(train_df.index, pd.DatetimeIndex) else None
         test_idx = test_df.index if isinstance(test_df.index, pd.DatetimeIndex) else None
@@ -294,6 +346,11 @@ class UnifiedPipeline:
             'test_idx': test_idx,
             'y_test': y_test
         }
+
+        # expose normalization metadata when applied (useful for reproducibility)
+        if getattr(self, '_normalized_features', None):
+            results['metadata']['normalized_features'] = self._normalized_features
+            results['metadata']['excluded_from_normalization'] = self._excluded_from_normalization
         
         # Memory Optimization: Optional raw data inclusion
         if include_raw:
@@ -313,7 +370,17 @@ class UnifiedPipeline:
             results['trees'] = self._run_tree_models(df, target_col)
             
         if 'deep_learning' in self.model_types:
-            results['deep_learning'] = self._run_deep_learning_models(X_train, y_train, X_test, y_test, train_idx, test_idx)
+            # Pass the full DatetimeIndex to dl_model; dl_model will internally
+            # slice by sequence_length (lookback). Do NOT pre-trim the index here
+            # to avoid double-slicing which disables date x-axis in plots.
+            dl_res = self._run_deep_learning_models(X_train, y_train, X_test, y_test, train_idx, test_idx)
+            # Defensive alignment: if dl_model returns predictions shorter than the global test_idx,
+            # attach a `plot_idx` that maps predictions to the tail of `test_idx` so plotting aligns.
+            if isinstance(dl_res, dict) and 'predictions' in dl_res and test_idx is not None:
+                preds = np.asarray(dl_res['predictions'])
+                if len(preds) <= len(test_idx):
+                    dl_res['plot_idx'] = test_idx[-len(preds):]
+            results['deep_learning'] = dl_res
             
         # Normalize model outputs to include a unified 'predictions' key where possible
         # This adapter helps the ensemble method find per-model predictions even when
@@ -687,6 +754,7 @@ def main() -> None:
     parser.add_argument("--random_state", type=int, help="Random seed for reproducibility", default=42)
     parser.add_argument("--use_ensemble", action="store_true", help="Enable ensemble backtesting", default=True)
     parser.add_argument("--include_raw", action="store_true", help="Include large raw datasets in the output JSON", default=False)
+    parser.add_argument("--normalize", action="store_true", help="Apply StandardScaler to numeric features (optional)", default=False)
     # Plotting toggles: default to True, but allow suppression with --no-plots
     parser.add_argument("--show_plots", "--show-plots", action="store_true", dest="show_plots", help="Display plots for model results")
     parser.add_argument("--no_plots", "--no-plots", action="store_false", dest="show_plots", help="Suppress all plots")
@@ -749,7 +817,8 @@ def main() -> None:
         n_splits=pipeline_args.get("n_splits", 5),
         random_state=pipeline_args.get("random_state", 42),
         use_ensemble=pipeline_args.get("use_ensemble", True),
-        include_raw=pipeline_args.get("include_raw", False)
+        include_raw=pipeline_args.get("include_raw", False),
+        normalize=pipeline_args.get("normalize", False)
     )
 
     # Print summary of results
