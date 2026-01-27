@@ -119,6 +119,25 @@ def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['close_over_SMA20'] = df['close'] / df['SMA_20']
         df['momentum_SMA20'] = df['close'] - df['SMA_20']
 
+    # SuperTrend (Wilder ATR-based). Add both the band value and a direction signal
+    try:
+        # local import to avoid circular imports during module import time
+        from engine.datasets.indicators import compute_supertrend
+    except Exception:
+        try:
+            from indicators import compute_supertrend
+        except Exception:
+            compute_supertrend = None
+
+    if compute_supertrend is not None and {'high', 'low', 'close'}.issubset(df.columns):
+        try:
+            st, st_dir = compute_supertrend(df, period=10, multiplier=3.0, high_col='high', low_col='low', close_col='close')
+            df['supertrend'] = st
+            df['supertrend_dir'] = st_dir
+        except Exception as _:
+            # non-fatal: leave without SuperTrend if computation fails
+            pass
+
     # Imputation Strategy to minimize "Data Trimming" (head/tail row loss):
     # 1. Financial metrics (EPS, Revenue) are periodic. 
     # Forward-fill carries the last report forward.
@@ -415,7 +434,7 @@ def prepare_analysis_data(
     correlation = pd.DataFrame()
     corr_df = pd.DataFrame()  # Initialize to avoid unbound error
     corr_cols = [c for c in (
-        'close', 'volume', 'daily_revenue', 'foreign_investor_net', 
+        'open', 'high', 'low', 'close', 'volume', 'daily_revenue', 'foreign_investor_net', 
         'investment_trust_net', 'dealer_net', 'MarginPurchaseBalanceChange', 
         'ShortSaleBalanceChange', 'eps', 'gross_profit',
         'SMA_5', 'SMA_20', 'RSI', 'MACD', 'Daily_Return', 'Volatility', 'target_close'

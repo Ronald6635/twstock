@@ -25,6 +25,86 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import re  # used to decode unicode escape sequences in Plotly HTML
+import base64
+from typing import Optional
+
+
+def ensure_supertrend(df_price: pd.DataFrame) -> pd.DataFrame:
+    """Compute and attach SuperTrend columns to `df_price` in-place if OHLC present and SuperTrend missing.
+
+    Returns the modified DataFrame (same object for chaining). This is idempotent.
+    """
+    if df_price is None or df_price.empty:
+        return df_price
+    if {'supertrend', 'supertrend_dir'}.issubset(df_price.columns):
+        return df_price
+    if not {'high', 'low', 'close'}.issubset(df_price.columns):
+        return df_price
+    try:
+        from engine.datasets.indicators import compute_supertrend
+    except Exception:
+        try:
+            from indicators import compute_supertrend
+        except Exception:
+            return df_price
+    try:
+        st, st_dir = compute_supertrend(df_price, period=10, multiplier=3.0)
+        df_price['supertrend'] = st
+        df_price['supertrend_dir'] = st_dir
+    except Exception:
+        # non-fatal; leave df_price unchanged
+        pass
+    return df_price
+
+
+def supertrend_thumbnail_png(df_price: pd.DataFrame, width: int = 700, height: int = 140) -> Optional[str]:
+    """Render a compact PNG thumbnail of Close + SuperTrend and return a data-URL (base64 PNG).
+
+    - Uses matplotlib (imported lazily) so it doesn't add a hard runtime dependency unless called.
+    - Returns None if required columns are missing or rendering fails.
+
+    Args:
+        df_price: DataFrame containing at least 'date', 'close' and 'supertrend' columns.
+        width, height: pixel dimensions of the output image.
+
+    Returns:
+        data URL (str) beginning with ``data:image/png;base64,`` or None on failure.
+    """
+    if df_price is None or df_price.empty:
+        return None
+    if not {'date', 'close', 'supertrend'}.issubset(df_price.columns):
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.dates import DateFormatter
+        from io import BytesIO
+
+        fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
+        ax.plot(pd.to_datetime(df_price['date']), df_price['close'], color="#1f77b4", linewidth=1.2, label='Close')
+        ax.plot(pd.to_datetime(df_price['date']), df_price['supertrend'], color='k', linewidth=1.4, linestyle='--', label='SuperTrend')
+
+        # plot buy/sell markers using same color convention as the interactive chart
+        if 'supertrend_dir' in df_price.columns:
+            buys = df_price[df_price['supertrend_dir'] == 1]
+            sells = df_price[df_price['supertrend_dir'] == -1]
+            if not buys.empty:
+                ax.scatter(pd.to_datetime(buys['date']), buys['close'], marker='^', c='#FF3232', s=30, zorder=4)
+            if not sells.empty:
+                ax.scatter(pd.to_datetime(sells['date']), sells['close'], marker='v', c='#00AB5E', s=30, zorder=4)
+
+        ax.set_axis_off()
+        ax.margins(0.02)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        buf.seek(0)
+        data = base64.b64encode(buf.read()).decode('ascii')
+        return 'data:image/png;base64,' + data
+    except Exception:
+        return None
 
 # Try importing from app, with a fallback to add project root to sys.path so the script can be run directly
 try:
@@ -204,6 +284,12 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
         )
     )
 
+    # compute SuperTrend on-the-fly when OHLC exist but indicator columns are missing
+    try:
+        ensure_supertrend(df_price)
+    except Exception:
+        pass
+
     # Row 1: K-line (candlestick) using price data if available
     if not df_price.empty and all(c in df_price.columns for c in ('open','high','low','close')):
         aux_fig.add_trace(go.Candlestick(
@@ -219,6 +305,42 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
         ), row=1, col=1)
         # Disable rangeslider to allow x-axis syncing with other subplots
         aux_fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
+
+        # Plot SuperTrend line if present (or computed earlier by ensure_supertrend)
+        if 'supertrend' in df_price.columns and df_price['supertrend'].notna().any():
+            aux_fig.add_trace(go.Scatter(
+                x=df_price['date'],
+                y=df_price['supertrend'],
+                mode='lines',
+                line=dict(color='black', width=2, dash='dash'),
+                name='SuperTrend',
+                hovertemplate='SuperTrend: %{y:.4f}<extra></extra>'
+            ), row=1, col=1)
+
+            # Plot buy/sell markers based on supertrend_dir when available
+            if 'supertrend_dir' in df_price.columns:
+                buys = df_price[df_price['supertrend_dir'] == 1]
+                sells = df_price[df_price['supertrend_dir'] == -1]
+
+                if not buys.empty:
+                    aux_fig.add_trace(go.Scatter(
+                        x=buys['date'],
+                        y=buys['close'],
+                        mode='markers',
+                        marker=dict(symbol='triangle-up', color='#FF3232', size=10),
+                        name='SuperTrend Buy',
+                        hovertemplate='Buy (SuperTrend): %{y:.2f}<extra></extra>'
+                    ), row=1, col=1)
+
+                if not sells.empty:
+                    aux_fig.add_trace(go.Scatter(
+                        x=sells['date'],
+                        y=sells['close'],
+                        mode='markers',
+                        marker=dict(symbol='triangle-down', color='#00AB5E', size=10),
+                        name='SuperTrend Sell',
+                        hovertemplate='Sell (SuperTrend): %{y:.2f}<extra></extra>'
+                    ), row=1, col=1)
 
     # Row 2: Volume (from df_rec to ensure it's directly from the volume field in JSON)
     if not df_rec.empty and 'volume' in df_rec.columns:
