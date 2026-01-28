@@ -117,8 +117,11 @@ def main():
                         results[api_name] = {'ok': False, 'error': str(e)}
                         continue
 
-            combined['cache'][api_name] = {'source': source or 'cache', 'cached': source == 'cache', 'records': data}
-            results[api_name] = {'ok': True}
+            if data is not None:
+                combined['cache'][api_name] = {'source': source or 'cache', 'cached': source == 'cache', 'records': data}
+                results[api_name] = {'ok': True}
+            else:
+                results[api_name] = {'ok': False, 'error': 'No data'}
 
         # Derive monthly aggregates for revenue (cc. generate_plotly_kline_chart)
         try:
@@ -208,11 +211,12 @@ def main():
             pass
 
         # Persist combined files
-        try:
-            files = write_combined_files(company, stock_id, start_date, end_date, combined)
-            print(f"Saved files: {files['json']}, {files['csv']}")
-        except Exception as e:
-            print(f"Failed to write combined files: {e}")
+        if combined['cache']:
+            try:
+                files = write_combined_files(company, stock_id, start_date, end_date, combined)
+                print(f"Saved files: {files['json']}, {files['csv']}")
+            except Exception as e:
+                print(f"Failed to write combined files: {e}")
 
         # Print summary
         print(f"Summary for {stock_id}:")

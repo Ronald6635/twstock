@@ -1,0 +1,27 @@
+{
+    "api_key": "FINMIND_API_KEY",
+    "start_date": "2020-01-01",
+    "end_date": "2026-01-28",
+    "stocks": "all",
+    "run_frequency": "daily",
+    "output_dirs": {
+        "data": "data",
+        "reports": "reports",
+        "logs": "logs",
+        "summary": "summary",
+        "temp": "temp"
+    },
+    "indicator_params": {
+        "supertrend_period": 10,
+        "supertrend_multiplier": 3.0,
+        "ma_periods": [20, 60, 120],
+        "rsi_period": 14,
+        "stoch_k_period": 14,
+        "stoch_d_period": 3,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9
+    },
+    "analysis_days": 14,
+    "interactive_plots": false
+}

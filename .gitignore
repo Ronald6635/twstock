@@ -132,3 +132,8 @@ engine/datasets/*/*.html
 engine/datasets/best_model.*
 examples/
 engine/datasets/results.json
+engine/robot/data/*.csv
+engine/robot/data/*.json
+engine/robot/reports/
+engine/robot/summary/
+engine/datasets/results.json
