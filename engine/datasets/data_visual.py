@@ -307,6 +307,7 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> Tuple[go.Figu
         ), row=1, col=1)
         # Disable rangeslider to allow x-axis syncing with other subplots
         aux_fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
+        aux_fig.update_yaxes(title_text='Price', rangemode='nonnegative', row=1, col=1)
 
         # Plot SuperTrend line if present (or computed earlier by ensure_supertrend)
         if 'supertrend' in df_price.columns and df_price['supertrend'].notna().any():
@@ -657,6 +658,51 @@ if __name__ == "__main__":
                 var chartData = {data_json};
                 var plotDiv = document.getElementById('aux-chart');
 
+                // Debounce function to limit the rate of function calls
+                function debounce(func, wait) {{
+                    var timeout;
+                    return function executedFunction(...args) {{
+                        const later = function() {{
+                            clearTimeout(timeout);
+                            func(...args);
+                        }};
+                        clearTimeout(timeout);
+                        timeout = setTimeout(later, wait);
+                    }};
+                }}
+
+                // Binary search to find the leftmost index where date >= target
+                function binarySearchLeft(rowData, target) {{
+                    var low = 0;
+                    var high = rowData.length;
+                    while (low < high) {{
+                        var mid = Math.floor((low + high) / 2);
+                        var dateTime = new Date(rowData[mid][0]).getTime();
+                        if (dateTime < target) {{
+                            low = mid + 1;
+                        }} else {{
+                            high = mid;
+                        }}
+                    }}
+                    return low;
+                }}
+
+                // Binary search to find the rightmost index where date <= target
+                function binarySearchRight(rowData, target) {{
+                    var low = 0;
+                    var high = rowData.length;
+                    while (low < high) {{
+                        var mid = Math.floor((low + high) / 2);
+                        var dateTime = new Date(rowData[mid][0]).getTime();
+                        if (dateTime <= target) {{
+                            low = mid + 1;
+                        }} else {{
+                            high = mid;
+                        }}
+                    }}
+                    return low - 1;
+                }}
+
                 // Helper: extract x-axis range from relayout event payload in various formats
                 function extractXRange(eventdata) {{
                     // Case 1: xaxis.range provided as array
@@ -669,7 +715,7 @@ if __name__ == "__main__":
                     }}
                     // Case 3: keys like 'xaxis2.range[0]' / 'xaxis2.range[1]' or 'xaxis2.range'
                     for (var k in eventdata) {{
-                        if (k.match(/^xaxis\d*\.range\[0\]$/)) {{
+                        if (k.match(/^xaxis\\d*\\.range\\[0\\]$/)) {{
                             var prefix = k.split('.range')[0];
                             var start = eventdata[prefix + '.range[0]'];
                             var end = eventdata[prefix + '.range[1]'];
@@ -677,85 +723,95 @@ if __name__ == "__main__":
                                 return [new Date(start).getTime(), new Date(end).getTime()];
                             }}
                         }}
-                        if (k.match(/^xaxis\d*\.range$/) && Array.isArray(eventdata[k]) && eventdata[k].length === 2) {{
+                        if (k.match(/^xaxis\\d*\\.range$/) && Array.isArray(eventdata[k]) && eventdata[k].length === 2) {{
                             return [new Date(eventdata[k][0]).getTime(), new Date(eventdata[k][1]).getTime()];
                         }}
                     }}
                     return null;
                 }}
 
-                if (plotDiv && Object.keys(chartData).length > 0) {{
-                    plotDiv.on('plotly_relayout', function(eventdata) {{
-                        // If relayout signals a full autorange reset, re-enable y autorange for all rows
-                        var autorangeReset = false;
-                        for (var k in eventdata) {{
-                            if (k.match(/^xaxis\d*\.autorange$/) && eventdata[k] === true) {{
-                                autorangeReset = true;
-                                break;
-                            }}
-                            // some relayouts indicate axis cleared by providing null or undefined ranges
-                            if (k.match(/^xaxis\d*\.range$/) && (eventdata[k] === null || eventdata[k] === undefined)) {{
-                                autorangeReset = true;
-                                break;
-                            }}
+                // Debounced relayout handler
+                var debouncedRelayout = debounce(function(eventdata) {{
+                    // If relayout signals a full autorange reset, re-enable y autorange for all rows
+                    var autorangeReset = false;
+                    for (var k in eventdata) {{
+                        if (k.match(/^xaxis\\d*\\.autorange$/) && eventdata[k] === true) {{
+                            autorangeReset = true;
+                            break;
+                        }}
+                        // some relayouts indicate axis cleared by providing null or undefined ranges
+                        if (k.match(/^xaxis\\d*\\.range$/) && (eventdata[k] === null || eventdata[k] === undefined)) {{
+                            autorangeReset = true;
+                            break;
+                        }}
+                    }}
+
+                    if (autorangeReset) {{
+                        var resetObj = {{}};
+                        for (var i = 2; i <= 10; i++) {{
+                            resetObj['yaxis' + i + '.autorange'] = true;
+                        }}
+                        Plotly.relayout(plotDiv, resetObj);
+                        return;
+                    }}
+
+                    var xRangeArr = extractXRange(eventdata);
+                    if (!xRangeArr) {{
+                        return;
+                    }}
+                    var xMin = xRangeArr[0];
+                    var xMax = xRangeArr[1];
+
+                    // Update y-axis for each row with data
+                    Object.keys(chartData).forEach(function(rowKey) {{
+                        var rowData = chartData[rowKey];
+                        if (rowData.length === 0) return;
+
+                        // Use binary search to find visible range
+                        var startIdx = binarySearchLeft(rowData, xMin);
+                        var endIdx = binarySearchRight(rowData, xMax);
+
+                        if (startIdx > endIdx) {{
+                            return; // no visible points
                         }}
 
-                        if (autorangeReset) {{
-                            var resetObj = {{}};
-                            for (var i = 2; i <= 10; i++) {{
-                                resetObj['yaxis' + i + '.autorange'] = true;
-                            }}
-                            Plotly.relayout(plotDiv, resetObj);
-                            return;
+                        // Extract visible y values
+                        var visibleY = [];
+                        for (var i = startIdx; i <= endIdx; i++) {{
+                            visibleY.push(rowData[i][1]);
                         }}
 
-                        var xRangeArr = extractXRange(eventdata);
-                        if (!xRangeArr) {{
-                            return;
-                        }}
-                        var xMin = xRangeArr[0];
-                        var xMax = xRangeArr[1];
-
-                        // Update y-axis for each row with data
-                        Object.keys(chartData).forEach(function(rowKey) {{
-                            var rowData = chartData[rowKey];
-                            var visibleY = [];
-
-                            rowData.forEach(function(point) {{
-                                var dateTime = new Date(point[0]).getTime();
-                                if (dateTime >= xMin && dateTime <= xMax) {{
-                                    visibleY.push(point[1]);
-                                }}
-                            }});
-
-                            if (visibleY.length > 0) {{
-                                var yMin = Math.min.apply(null, visibleY);
-                                var yMax = Math.max.apply(null, visibleY);
-                                // handle flat lines (avoid zero padding)
-                                if (yMax === yMin) {{
-                                    var pad = Math.abs(yMax) * 0.02 || 1.0; // 2% or at least 1
-                                    yMin -= pad;
-                                    yMax += pad;
-                                }} else {{
-                                    var yPadding = (yMax - yMin) * 0.1;
-                                    yMin -= yPadding;
-                                    yMax += yPadding;
-                                }}
-                                // If all visible values are non-negative, clamp lower bound to 0 to avoid negative axis
-                                if (Math.min.apply(null, visibleY) >= 0) {{
-                                    yMin = Math.max(0, yMin);
-                                }}
-
-                                var rowNum = parseInt(rowKey.replace('row', ''));
-                                var yAxisKey = rowNum === 1 ? 'yaxis' : 'yaxis' + rowNum;
-
-                                var relayoutObj = {{}};
-                                relayoutObj[yAxisKey + '.range'] = [yMin, yMax];
-                                relayoutObj[yAxisKey + '.autorange'] = false;
-                                Plotly.relayout(plotDiv, relayoutObj);
+                        if (visibleY.length > 0) {{
+                            var yMin = Math.min.apply(null, visibleY);
+                            var yMax = Math.max.apply(null, visibleY);
+                            // handle flat lines (avoid zero padding)
+                            if (yMax === yMin) {{
+                                var pad = Math.abs(yMax) * 0.02 || 1.0; // 2% or at least 1
+                                yMin -= pad;
+                                yMax += pad;
+                            }} else {{
+                                var yPadding = (yMax - yMin) * 0.1;
+                                yMin -= yPadding;
+                                yMax += yPadding;
                             }}
-                        }});
+                            // If all visible values are non-negative, clamp lower bound to 0 to avoid negative axis
+                            if (Math.min.apply(null, visibleY) >= 0) {{
+                                yMin = Math.max(0, yMin);
+                            }}
+
+                            var rowNum = parseInt(rowKey.replace('row', ''));
+                            var yAxisKey = rowNum === 1 ? 'yaxis' : 'yaxis' + rowNum;
+
+                            var relayoutObj = {{}};
+                            relayoutObj[yAxisKey + '.range'] = [yMin, yMax];
+                            relayoutObj[yAxisKey + '.autorange'] = false;
+                            Plotly.relayout(plotDiv, relayoutObj);
+                        }}
                     }});
+                }}, 100); // 100ms debounce delay
+
+                if (plotDiv && Object.keys(chartData).length > 0) {{
+                    plotDiv.on('plotly_relayout', debouncedRelayout);
                 }}
             }});
             </script>

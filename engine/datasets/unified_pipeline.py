@@ -190,7 +190,7 @@ class UnifiedPipeline:
             print(f"Warning: could not compute SuperTrend indicator: {e}")
         
         # Identify numeric feature columns (exclude targets, dates, metadata)
-        excluded = set(target_cols) | {'close', 'open', 'high', 'low', 'date', 'stock_id', 'SMA_5', 'SMA_20', 'supertrend_dir'}
+        excluded = set(target_cols) | {'close', 'open', 'high', 'low', 'date', 'stock_id', 'SMA_5', 'SMA_20'}
         self.feat_cols = [c for c in df.columns if c not in excluded and pd.api.types.is_numeric_dtype(df[c])]
         
         if not self.feat_cols:
