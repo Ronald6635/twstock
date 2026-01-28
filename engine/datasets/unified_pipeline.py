@@ -190,7 +190,7 @@ class UnifiedPipeline:
             print(f"Warning: could not compute SuperTrend indicator: {e}")
         
         # Identify numeric feature columns (exclude targets, dates, metadata)
-        excluded = set(target_cols) | {'close', 'open', 'high', 'low', 'date', 'stock_id', 'SMA_5', 'SMA_20'}
+        excluded = set(target_cols) | {'close', 'open', 'high', 'low', 'date', 'stock_id', 'SMA_5', 'SMA_20', 'supertrend_dir'}
         self.feat_cols = [c for c in df.columns if c not in excluded and pd.api.types.is_numeric_dtype(df[c])]
         
         if not self.feat_cols:
@@ -384,7 +384,7 @@ class UnifiedPipeline:
             
         # Normalize model outputs to include a unified 'predictions' key where possible
         # This adapter helps the ensemble method find per-model predictions even when
-        # individual training functions return different keys (e.g., 'y_pred_lr', 'y_pred_svr').
+        # individual training functions return different keys (e.g., 'y_pred_lr', 'y_pred_svr'.
         def _collect_and_avg(arrays: list, length_target: Optional[int] = None):
             """Return a 1D numpy array averaged across input arrays, aligned to length_target if provided."""
             arrays = [np.asarray(a).astype(float) for a in arrays if a is not None]
@@ -517,7 +517,8 @@ class UnifiedPipeline:
             x_train_idx=train_idx,
             x_test_idx=test_idx,
             show_plots=self.show_plots,
-            tune_hyperparams=True
+            tune_hyperparams=True,
+            scaler=getattr(self, "scaler", None)  # <-- pass pipeline scaler if available
         )
     
     # =============================================================================

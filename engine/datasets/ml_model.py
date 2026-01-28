@@ -126,7 +126,7 @@ def regression_models(
     
     if show_plots:
         plt.figure(figsize=(8, 6))
-        plt.scatter(y_test, y_pred_lr, alpha=0.7, label='Predicted vs Actual')
+        plt.scatter(y_test, y_pred_lr, alpha=0.7, label='Actual vs Predicted')
         plt.xlabel('Actual Close Prices')
         plt.ylabel('Predicted Close Prices')
         plt.title('Actual vs Predicted Close Prices (Polynomial Linear Regression)')

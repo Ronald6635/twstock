@@ -272,8 +272,8 @@ def prepare_data_for_chart(preprocessed_data: Dict[str, Any] | List[Dict[str, An
 
 # Module-level helper to build the auxiliary Plotly figure. Made module-level so tests
 # can import and inspect traces directly without invoking the script entrypoint.
-def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
-    """Build and return the auxiliary Plotly figure for the given dataframes."""
+def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> Tuple[go.Figure, Dict[str, List[List]]]:
+    """Build and return the auxiliary Plotly figure and data for JS dynamic rescaling."""
     aux_fig = make_subplots(
         rows=10, cols=1, shared_xaxes=True, vertical_spacing=0.02,
         row_heights=[0.28, 0.10, 0.10, 0.10, 0.08, 0.08, 0.06, 0.06, 0.07, 0.07],
@@ -283,6 +283,8 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             '融券餘額增減 (ShortSaleBalanceChange)', '每股盈餘 (EPS)', '營業毛利 (Gross Profit 100M)'
         )
     )
+
+    data_for_js = {}  # Dict to hold data for each row: {'row2': [[date_str, value], ...], ...}
 
     # compute SuperTrend on-the-fly when OHLC exist but indicator columns are missing
     try:
@@ -299,8 +301,8 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             low=df_price['low'],
             close=df_price['close'],
             name='K-Line',
-            increasing=dict(line=dict(color='#FF3232'), fillcolor='rgba(255,50,50,0.15)'),
-            decreasing=dict(line=dict(color='#00AB5E'), fillcolor='rgba(0,171,94,0.12)'),
+            increasing=dict(line=dict(color='#FF3232', width=1.8), fillcolor='rgba(255,50,50,0.12)'),
+            decreasing=dict(line=dict(color='#00AB5E', width=1.8), fillcolor='rgba(0,171,94,0.12)'),
             showlegend=False
         ), row=1, col=1)
         # Disable rangeslider to allow x-axis syncing with other subplots
@@ -360,8 +362,13 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             hovertemplate='Volume: %{y:,.0f}<extra></extra>'
         ), row=2, col=1)
         # Fix: Show tick labels, use comma format, and force non-negative range to fix the -50M scale
+        # aux_fig.update_yaxes(title_text='Volume', tickformat=',', row=2, col=1, 
+                            #  autorange=True, rangemode='nonnegative', showgrid=True)
         aux_fig.update_yaxes(title_text='Volume', tickformat=',', row=2, col=1, 
-                             autorange=True, rangemode='nonnegative', showgrid=True)
+                             rangemode='nonnegative', showgrid=True)
+        
+        # Prepare data for JS: list of [date_str, volume_value] pairs
+        data_for_js['row2'] = [[str(d), float(v)] for d, v in zip(vol_x, vol_y)]
         
     # Row 3: daily_revenue (from df_rec if available)
     if not df_rec.empty and 'daily_revenue' in df_rec.columns:
@@ -390,7 +397,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             name='daily_revenue',
             hovertemplate='daily_revenue: %{y:,.0f}<extra></extra>'
         ), row=3, col=1)
-        aux_fig.update_yaxes(tickformat=',', row=3, col=1)
+        aux_fig.update_yaxes(title_text='Daily Revenue', tickformat=',', row=3, col=1)
+
+        # Prepare data for JS
+        data_for_js['row3'] = [[str(d), float(v)] for d, v in zip(df_rev['date'], df_rev['daily_revenue'])]
 
     # Row 4: 外資 (Foreign)
     if not df_rec.empty and 'foreign_investor_net' in df_rec.columns:
@@ -400,7 +410,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_rec['foreign_investor_net']],
             name='外資'
         ), row=4, col=1)
-        aux_fig.update_yaxes(tickformat=',', row=4, col=1)
+        aux_fig.update_yaxes(title_text='外資', tickformat=',', row=4, col=1)
+
+        # Prepare data for JS
+        data_for_js['row4'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], df_rec['foreign_investor_net'])]
 
     # Row 5-6: 投信與自營商 (Investment Trust & Dealer) - two traces in separate rows for clarity
     if not df_rec.empty and 'investment_trust_net' in df_rec.columns:
@@ -410,6 +423,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_rec['investment_trust_net']],
             name='投信'
         ), row=5, col=1)
+    aux_fig.update_yaxes(title_text='投信', tickformat=',', row=5, col=1)
+    if not df_rec.empty and 'investment_trust_net' in df_rec.columns:
+        # Prepare data for JS
+        data_for_js['row5'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], df_rec['investment_trust_net'])]
     if not df_rec.empty and 'dealer_net' in df_rec.columns:
         aux_fig.add_trace(go.Bar(
             x=df_rec['date'],
@@ -417,6 +434,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             marker_color=['#FF3232' if v >= 0 else '#00AB5E' for v in df_rec['dealer_net']],
             name='自營商'
         ), row=6, col=1)
+    aux_fig.update_yaxes(title_text='自營商', tickformat=',', row=6, col=1)
+    if not df_rec.empty and 'dealer_net' in df_rec.columns:
+        # Prepare data for JS
+        data_for_js['row6'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], df_rec['dealer_net'])]
 
     # Row 7-8: margin/short balance changes
     if not df_rec.empty and 'MarginPurchaseBalanceChange' in df_rec.columns:
@@ -429,6 +450,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             name='MarginPurchaseBalanceChange',
             hovertemplate='MarginPurchaseBalanceChange: %{y:,.0f}<extra></extra>'
         ), row=7, col=1)
+    aux_fig.update_yaxes(title_text='融資增減', tickformat=',', row=7, col=1)
+    if not df_rec.empty and 'MarginPurchaseBalanceChange' in df_rec.columns:
+        # Prepare data for JS
+        data_for_js['row7'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], m_vals)]
     if not df_rec.empty and 'ShortSaleBalanceChange' in df_rec.columns:
         s_vals = pd.to_numeric(df_rec['ShortSaleBalanceChange'], errors='coerce').fillna(0)
         s_colors = ['#FF3232' if v > 0 else ('#00AB5E' if v < 0 else '#8884d8') for v in s_vals]
@@ -439,6 +464,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             name='ShortSaleBalanceChange',
             hovertemplate='ShortSaleBalanceChange: %{y:,.0f}<extra></extra>'
         ), row=8, col=1)
+    aux_fig.update_yaxes(title_text='融券增減', tickformat=',', row=8, col=1)
+    if not df_rec.empty and 'ShortSaleBalanceChange' in df_rec.columns:
+        # Prepare data for JS
+        data_for_js['row8'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], s_vals)]
 
     # Row 9: EPS
     if not df_rec.empty and 'eps' in df_rec.columns:
@@ -454,6 +483,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             line=dict(width=2, color='rgba(31,119,180,0.5)'),
             hovertemplate='EPS: %{y:.2f}<extra></extra>'
         ), row=9, col=1)
+        aux_fig.update_yaxes(title_text='EPS', row=9, col=1)        
+
+        # Prepare data for JS
+        data_for_js['row9'] = [[str(d), float(v) if not pd.isna(v) else 0] for d, v in zip(df_rec['date'], eps_vals)]        
 
     # Row 10: Gross Profit
     if not df_rec.empty and 'gross_profit' in df_rec.columns:
@@ -470,7 +503,10 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
             name='Gross Profit (100M)',
             hovertemplate='Gross Profit: %{y:.2f} 100M<extra></extra>'
         ), row=10, col=1)
-        aux_fig.update_yaxes(title_text='100M', row=10, col=1)
+        aux_fig.update_yaxes(title_text='毛利', row=10, col=1)
+
+        # Prepare data for JS (use scaled values)
+        data_for_js['row10'] = [[str(d), float(v)] for d, v in zip(df_rec['date'], gp_scaled)]
 
     # Remove gaps for non-trading days by computing calendar dates missing from the records
     if not df_rec.empty and 'date' in df_rec.columns:
@@ -497,7 +533,7 @@ def build_aux_fig(df_price: pd.DataFrame, df_rec: pd.DataFrame) -> go.Figure:
 
     # Final layout: Use 'x unified' hovermode for easier comparison across rows
     aux_fig.update_layout(height=1200, template='plotly_white', showlegend=False, hovermode='x unified')
-    return aux_fig
+    return aux_fig, data_for_js
 
 if __name__ == "__main__":
     import argparse
@@ -606,12 +642,124 @@ if __name__ == "__main__":
             if not df_rec.empty:
                 df_rec['date'] = pd.to_datetime(df_rec['date'])
 
-            aux_fig = build_aux_fig(df_price, df_rec)
-            aux_html = aux_fig.to_html(full_html=False, include_plotlyjs='cdn')
+            aux_fig, data_for_js = build_aux_fig(df_price, df_rec)
+            aux_html = aux_fig.to_html(full_html=False, include_plotlyjs='cdn', div_id='aux-chart')
             # Decode any literal \\uXXXX unicode escapes so generated HTML contains real Unicode
             aux_html = re.sub(r'\\u([0-9A-Fa-f]{4})', lambda m: chr(int(m.group(1), 16)), aux_html)
             f.write('\n')
             f.write(aux_html)
+            
+            # Embed data for JS dynamic rescaling
+            data_json = json.dumps(data_for_js)
+            f.write(f'''
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {{
+                var chartData = {data_json};
+                var plotDiv = document.getElementById('aux-chart');
+
+                // Helper: extract x-axis range from relayout event payload in various formats
+                function extractXRange(eventdata) {{
+                    // Case 1: xaxis.range provided as array
+                    if (eventdata['xaxis.range'] && eventdata['xaxis.range'].length === 2) {{
+                        return [new Date(eventdata['xaxis.range'][0]).getTime(), new Date(eventdata['xaxis.range'][1]).getTime()];
+                    }}
+                    // Case 2: xaxis.range[0] / xaxis.range[1]
+                    if (typeof eventdata['xaxis.range[0]'] !== 'undefined' && typeof eventdata['xaxis.range[1]'] !== 'undefined') {{
+                        return [new Date(eventdata['xaxis.range[0]']).getTime(), new Date(eventdata['xaxis.range[1]']).getTime()];
+                    }}
+                    // Case 3: keys like 'xaxis2.range[0]' / 'xaxis2.range[1]' or 'xaxis2.range'
+                    for (var k in eventdata) {{
+                        if (k.match(/^xaxis\d*\.range\[0\]$/)) {{
+                            var prefix = k.split('.range')[0];
+                            var start = eventdata[prefix + '.range[0]'];
+                            var end = eventdata[prefix + '.range[1]'];
+                            if (typeof start !== 'undefined' && typeof end !== 'undefined') {{
+                                return [new Date(start).getTime(), new Date(end).getTime()];
+                            }}
+                        }}
+                        if (k.match(/^xaxis\d*\.range$/) && Array.isArray(eventdata[k]) && eventdata[k].length === 2) {{
+                            return [new Date(eventdata[k][0]).getTime(), new Date(eventdata[k][1]).getTime()];
+                        }}
+                    }}
+                    return null;
+                }}
+
+                if (plotDiv && Object.keys(chartData).length > 0) {{
+                    plotDiv.on('plotly_relayout', function(eventdata) {{
+                        // If relayout signals a full autorange reset, re-enable y autorange for all rows
+                        var autorangeReset = false;
+                        for (var k in eventdata) {{
+                            if (k.match(/^xaxis\d*\.autorange$/) && eventdata[k] === true) {{
+                                autorangeReset = true;
+                                break;
+                            }}
+                            // some relayouts indicate axis cleared by providing null or undefined ranges
+                            if (k.match(/^xaxis\d*\.range$/) && (eventdata[k] === null || eventdata[k] === undefined)) {{
+                                autorangeReset = true;
+                                break;
+                            }}
+                        }}
+
+                        if (autorangeReset) {{
+                            var resetObj = {{}};
+                            for (var i = 2; i <= 10; i++) {{
+                                resetObj['yaxis' + i + '.autorange'] = true;
+                            }}
+                            Plotly.relayout(plotDiv, resetObj);
+                            return;
+                        }}
+
+                        var xRangeArr = extractXRange(eventdata);
+                        if (!xRangeArr) {{
+                            return;
+                        }}
+                        var xMin = xRangeArr[0];
+                        var xMax = xRangeArr[1];
+
+                        // Update y-axis for each row with data
+                        Object.keys(chartData).forEach(function(rowKey) {{
+                            var rowData = chartData[rowKey];
+                            var visibleY = [];
+
+                            rowData.forEach(function(point) {{
+                                var dateTime = new Date(point[0]).getTime();
+                                if (dateTime >= xMin && dateTime <= xMax) {{
+                                    visibleY.push(point[1]);
+                                }}
+                            }});
+
+                            if (visibleY.length > 0) {{
+                                var yMin = Math.min.apply(null, visibleY);
+                                var yMax = Math.max.apply(null, visibleY);
+                                // handle flat lines (avoid zero padding)
+                                if (yMax === yMin) {{
+                                    var pad = Math.abs(yMax) * 0.02 || 1.0; // 2% or at least 1
+                                    yMin -= pad;
+                                    yMax += pad;
+                                }} else {{
+                                    var yPadding = (yMax - yMin) * 0.1;
+                                    yMin -= yPadding;
+                                    yMax += yPadding;
+                                }}
+                                // If all visible values are non-negative, clamp lower bound to 0 to avoid negative axis
+                                if (Math.min.apply(null, visibleY) >= 0) {{
+                                    yMin = Math.max(0, yMin);
+                                }}
+
+                                var rowNum = parseInt(rowKey.replace('row', ''));
+                                var yAxisKey = rowNum === 1 ? 'yaxis' : 'yaxis' + rowNum;
+
+                                var relayoutObj = {{}};
+                                relayoutObj[yAxisKey + '.range'] = [yMin, yMax];
+                                relayoutObj[yAxisKey + '.autorange'] = false;
+                                Plotly.relayout(plotDiv, relayoutObj);
+                            }}
+                        }});
+                    }});
+                }}
+            }});
+            </script>
+            ''')
         except Exception:
             # if anything fails, skip auxiliary chart cleanly
             pass

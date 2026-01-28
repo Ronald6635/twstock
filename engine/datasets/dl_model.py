@@ -160,7 +160,8 @@ def hyperparameter_search(
     y_test: np.ndarray,
     use_lstm: bool,
     sequence_length: int = 30,
-    n_calls: int = 20
+    n_calls: int = 20,
+    scaler: Optional[StandardScaler] = None
 ) -> Dict[str, Any]:
     """
     Perform Bayesian optimization for hyperparameter tuning using scikit-optimize.
@@ -175,6 +176,7 @@ def hyperparameter_search(
         use_lstm: Whether to use LSTM model
         sequence_length: Sequence length for LSTM
         n_calls: Number of optimization calls
+        scaler: Optional StandardScaler if features are already scaled
         
     Returns:
         Dict with best hyperparameters
@@ -235,9 +237,14 @@ def hyperparameter_search(
         }
         
         # Scale data
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
+        if scaler is not None:
+            # Features already scaled
+            X_train_scaled = X_train
+            X_test_scaled = X_test
+        else:
+            feature_scaler = StandardScaler()
+            X_train_scaled = feature_scaler.fit_transform(X_train)
+            X_test_scaled = feature_scaler.transform(X_test)
         y_scaler = StandardScaler().fit(y_train.reshape(-1, 1))
         y_train_s = y_scaler.transform(y_train.reshape(-1, 1)).ravel()
         y_test_s = y_scaler.transform(y_test.reshape(-1, 1)).ravel()
@@ -287,7 +294,7 @@ def hyperparameter_search(
         except Exception:
             return 1.0  # Return high loss for failed configurations
     
-    # Run optimization
+    # Run optimization (Bayesian optimization using Gaussian Processes)
     res = gp_minimize(objective, space, n_calls=n_calls, random_state=42, n_jobs=-1)
     
     best_params = {
@@ -312,10 +319,11 @@ def models(
     y_test: np.ndarray,
     model_config: Optional[Dict[str, Any]] = None,
     use_lstm: bool = True,
-    tune_hyperparams: bool = False, # Whether to perform hyperparameter tuning
-    x_train_idx: Optional[Sequence] = None,
-    x_test_idx: Optional[Sequence] = None,
-    show_plots: bool = True
+    x_train_idx=None,
+    x_test_idx=None,
+    show_plots: bool = True,
+    tune_hyperparams: bool = True,
+    scaler: Optional[StandardScaler] = None
 ) -> Dict[str, Any]:
     """
     Train and evaluate a deep learning model for stock price prediction.
@@ -334,6 +342,7 @@ def models(
         x_train_idx: Optional training indices
         x_test_idx: Optional test indices
         show_plots: Whether to display plots
+        scaler: Optional StandardScaler if features are already scaled
         
     Returns:
         Dict containing model, history, predictions, and metrics
@@ -366,7 +375,7 @@ def models(
     # Perform hyperparameter tuning if requested
     if tune_hyperparams:
         print("Performing hyperparameter tuning with Bayesian optimization...")
-        best_config = hyperparameter_search(X_train, y_train, X_test, y_test, use_lstm, config['sequence_length'])
+        best_config = hyperparameter_search(X_train, y_train, X_test, y_test, use_lstm, config['sequence_length'], scaler=scaler)
         config.update(best_config)
         
         # Ensure integer hyperparameters are cast to standard Python ints
@@ -381,10 +390,17 @@ def models(
 
         print(f"Best hyperparameters found: {best_config}")
     
+    # Check if features are already scaled (scaler passed from pipeline)
+    input_already_scaled = scaler is not None
+    
     # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    if input_already_scaled:
+        X_train_scaled = X_train
+        X_test_scaled = X_test
+    else:
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
     
     # Scale target variable
     y_scaler = StandardScaler().fit(y_train.reshape(-1, 1))
@@ -520,7 +536,7 @@ def _plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, x_idx: Optional[Se
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
     # Scatter plot
-    ax1.scatter(y_true, y_pred, alpha=0.6, color='blue', label='Predictions')
+    ax1.scatter(y_true, y_pred, alpha=0.6, color='blue', label='Actual vs Predicted')
     ax1.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 
              'r--', linewidth=2, label='Perfect Prediction')
     ax1.set_xlabel('Actual Close Prices')
