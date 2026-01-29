@@ -38,6 +38,36 @@ except Exception:
     _dotenv_loaded = False
     # python-dotenv not installed; we'll continue but warn later if no env found
 
+
+# Helper: fetch and normalize FinMind /v2/user_info response
+def fetch_finmind_usage(token: str, timeout: int = 10) -> dict:
+    """Return a normalized dict for /v2/user_info.
+
+    Returns keys: ok (bool), status_code (int or None), data (dict),
+    error (str when exception), text (raw text, truncated).
+    """
+    url = "https://api.web.finmindtrade.com/v2/user_info"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        data = {}
+        if resp.ok:
+            ct = resp.headers.get("content-type", "").lower()
+            if ct.startswith("application/json"):
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = {}
+        return {
+            "ok": bool(resp.ok),
+            "status_code": resp.status_code,
+            "data": data if isinstance(data, dict) else {},
+            "text": (resp.text[:200] if hasattr(resp, "text") else ""),
+        }
+    except Exception as e:
+        return {"ok": False, "status_code": None, "data": {}, "error": str(e), "text": ""}
+
+
 def setup_logging(log_dir):
     """Setup logging to file and console."""
     log_file = os.path.join(log_dir, f"robot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
@@ -52,9 +82,69 @@ def setup_logging(log_dir):
     return log_file
 
 def load_config(config_path):
-    """Load configuration from JSON file."""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    """Load configuration from JSON file.
+
+    Supports JS-style comments (// and /* */) so `config.json` can contain
+    inline documentation. Performs basic validation for the FinMind quota
+    keys and returns the parsed dict.
+    """
+    import re
+    p = Path(config_path)
+    if not p.exists():
+        raise FileNotFoundError(f"config file not found: {p}")
+    txt = p.read_text(encoding='utf-8')
+    # strip single-line (//) and block (/* */) comments but keep line breaks
+    cleaned = re.sub(r"//.*?$|/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), txt, flags=re.M | re.S)
+    cfg = json.loads(cleaned)
+
+    # Basic validation and sensible defaults for new quota-related keys
+    if 'api_usage_threshold' not in cfg:
+        cfg['api_usage_threshold'] = 50
+    if not isinstance(cfg['api_usage_threshold'], int):
+        raise ValueError('api_usage_threshold must be an integer (absolute count or percent)')
+
+    # unit may be 'absolute' or 'percent' — default to absolute for backward compat
+    unit = str(cfg.get('api_usage_threshold_unit', 'absolute')).lower()
+    if unit not in ('absolute', 'percent'):
+        raise ValueError("api_usage_threshold_unit must be 'absolute' or 'percent'")
+    cfg['api_usage_threshold_unit'] = unit
+
+    # retry config
+    cfg['api_retry_max'] = int(cfg.get('api_retry_max', 3))
+
+    return cfg
+
+
+# Helper: quota math (percent <-> absolute) for a reported API limit
+from math import ceil
+
+def compute_effective_cutoff(api_usage_threshold: int, *, api_usage_threshold_unit: str = 'absolute', api_limit: int | None = None) -> int:
+    """Return absolute remaining-request cutoff from config values.
+
+    - If unit == 'absolute' -> return api_usage_threshold
+    - If unit == 'percent' and api_limit given -> ceil(api_limit * threshold/100)
+    - If unit == 'percent' and no api_limit -> fall back to configured value as absolute
+    """
+    unit = (api_usage_threshold_unit or 'absolute').lower()
+    if unit == 'absolute':
+        return int(api_usage_threshold)
+    if unit == 'percent':
+        if api_limit and isinstance(api_limit, int) and api_limit > 0:
+            return int(ceil(api_limit * (api_usage_threshold / 100.0)))
+        return int(api_usage_threshold)
+    return int(api_usage_threshold)
+
+
+def should_fetch_based_on_quota(remaining: int | None, limit: int | None, api_usage_threshold: int, api_usage_threshold_unit: str = 'absolute') -> bool:
+    """Return True if it's safe to fetch (remaining > cutoff). If remaining is None, allow by default."""
+    if remaining is None:
+        return True
+    try:
+        rem = int(remaining)
+    except Exception:
+        return True
+    cutoff = compute_effective_cutoff(api_usage_threshold, api_usage_threshold_unit=api_usage_threshold_unit, api_limit=limit)
+    return rem > cutoff
 
 def load_stocks(config):
     """Load stock list from config or tw_stock_info.json."""
@@ -83,7 +173,7 @@ def update_settings_json(stock_id, config):
     with open(settings_path, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=2)
 
-def run_batch_fetch(stock_id, config, temp_dir):
+def run_batch_fetch(stock_id: str, config: dict, temp_dir: Path) -> bool:
     """Run batch_fetch.py for a specific stock."""
     try:
         update_settings_json(stock_id, config)
@@ -112,46 +202,258 @@ def run_batch_fetch(stock_id, config, temp_dir):
             token = os.environ.get('FINMIND_API_KEY')
             token_source = '.env'
 
+        # Configurable protection and retry settings
+        api_usage_threshold = int(config.get('api_usage_threshold', 50))
+        api_usage_threshold_unit = str(config.get('api_usage_threshold_unit', 'absolute')).lower()
+        api_retry_max = int(config.get('api_retry_max', 3))
+
+        # Ensure these exist on all code paths
+        usage_parts: list[str] = []
+        remaining = None
+        limit = None
+        # collect parent messages early so any early-return paths can record reasons
+        parent_messages: list[str] = []
+
         if token:
-            # Validate token by calling user_info endpoint
+            # Use helper to fetch usage info and apply threshold/backoff logic
             try:
-                headers = {"Authorization": f"Bearer {token}"}
-                resp = requests.get("https://api.web.finmindtrade.com/v2/user_info", headers=headers, timeout=10)
-                if resp.ok:
-                    data = resp.json() if resp.headers.get('content-type','').startswith('application/json') else {}
-                    user_count = data.get('user_count') if isinstance(data, dict) else None
-                    if user_count is not None:
-                        logging.info(f"Valid FINMIND_API_KEY found (source: {token_source})")
-                        env['FINMIND_API_KEY'] = token
-                    else:
-                        logging.warning(f"FINMIND_API_KEY present (source: {token_source}) but validation returned unexpected response")
+                attempt = 0
+                usage = fetch_finmind_usage(token)
+                while attempt < api_retry_max and usage.get('status_code') == 429:
+                    # Respect Retry-After when provided
+                    retry_after = None
+                    try:
+                        # fetch_finmind_usage doesn't expose headers; do a light GET to read Retry-After
+                        r = requests.get("https://api.web.finmindtrade.com/v2/user_info", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                        retry_after = r.headers.get('Retry-After')
+                    except Exception:
+                        retry_after = None
+                    wait = int(retry_after) if (retry_after and retry_after.isdigit()) else (5 * (2 ** attempt))
+                    logging.warning(f"FinMind returned 429 (attempt {attempt+1}/{api_retry_max}), sleeping {wait}s before retry")
+                    attempt += 1
+                    import time
+                    time.sleep(wait)
+                    usage = fetch_finmind_usage(token)
+
+                if not usage.get('ok') and usage.get('status_code') != 429:
+                    logging.warning(f"FINMIND /user_info check failed (source: {token_source}): {usage.get('error') or usage.get('text')}")
+                    # proceed — batch_fetch may still succeed using cache
                 else:
-                    logging.warning(f"FINMIND_API_KEY present (source: {token_source}) but user_info returned {resp.status_code}")
+                    data = usage.get('data', {}) or {}
+                    # prefer explicit remaining; if missing, derive from reported limit & user_count
+                    remaining = data.get('api_requests_remaining') or data.get('remaining') or data.get('api_remaining')
+                    limit = data.get('api_request_limit') or data.get('api_limit')
+                    user_count = data.get('user_count')
+                    if remaining is None and isinstance(limit, int) and isinstance(user_count, int):
+                        # computed remaining = available requests = limit - used_by_user(s)
+                        remaining = int(limit) - int(user_count)
+                        logging.debug("Computed API remaining from limit-user_count: %s", remaining)
+
+                    # compute cutoff and decide; keep a parent_log snippet for visibility
+                    effective_cutoff = compute_effective_cutoff(api_usage_threshold, api_usage_threshold_unit=api_usage_threshold_unit, api_limit=limit)
+                    parent_log_lines = [
+                        f"Computed API remaining={remaining!s} (limit={limit!s}, user_count={user_count!s})",
+                        f"Computed cutoff={effective_cutoff} ({api_usage_threshold!s} {api_usage_threshold_unit})",
+                    ]
+
+                    if isinstance(remaining, int) and remaining <= effective_cutoff:
+                        msg = f"API requests remaining is low ({remaining} <= {effective_cutoff}) — skipping fetch to avoid hitting quota"
+                        logging.warning(msg)
+                        parent_messages.append(msg)
+                        parent_messages.append(f"Skipping fetch: remaining={remaining} <= cutoff={effective_cutoff}")
+                        # write parent-only temp log so operator can see why we skipped
+                        try:
+                            temp_log_dir = Path(temp_dir)
+                            temp_log_dir.mkdir(parents=True, exist_ok=True)
+                            fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
+                            with open(fetch_log, 'w', encoding='utf-8') as lf:
+                                lf.write('--- PARENT ---\n')
+                                lf.write("\n".join(parent_messages))
+                                lf.write("\n\n")
+                                lf.write('--- STDOUT ---\n')
+                                lf.write('')
+                                lf.write('\n--- STDERR ---\n')
+                                lf.write('')
+                            logging.info(f"Wrote parent-only batch_fetch log to {fetch_log} (skipped due to quota)")
+                        except Exception as _e:
+                            logging.warning(f"Unable to write parent-only batch_fetch log for {stock_id}: {_e}")
+                        return False
+
+                    if not should_fetch_based_on_quota(remaining, limit, api_usage_threshold, api_usage_threshold_unit):
+                        parent_log_lines.append(f"Skipping fetch to avoid hitting quota (remaining={remaining} <= cutoff={effective_cutoff})")
+                        # write parent section into the per-stock temp log (test expects this)
+                        batch_log = Path(temp_dir) / f"batch_fetch_{stock_id}.log"
+                        batch_log.write_text("--- PARENT ---\n" + "\n".join(parent_log_lines) + "\n", encoding="utf-8")
+                        logging.warning("Skipping fetch for %s due to quota (remaining=%s, cutoff=%s)", stock_id, remaining, effective_cutoff)
+                        return False
+
+                    # export computed cutoff for downstream visibility (kept from earlier change)
+                    env['ROBOT_API_USAGE_CUTOFF'] = str(effective_cutoff)
+
+                    # If remaining not provided but we have user_count+limit, compute remaining
+                    if remaining is None and isinstance(limit, int) and isinstance(data.get('user_count'), int):
+                        try:
+                            computed = int(limit) - int(data.get('user_count'))
+                        except Exception:
+                            computed = None
+                        if isinstance(computed, int):
+                            remaining = computed
+                            logging.info(f"Computed api_requests_remaining from api_request_limit - user_count: {limit} - {data.get('user_count')} = {remaining}")
+                            parent_messages.append(f"Computed API remaining={remaining} (from api_request_limit and user_count)")
+
+                    # defensive: treat negative remaining as 0 (already over quota)
+                    if isinstance(remaining, int) and remaining < 0:
+                        logging.warning(f"API shows usage above limit (user_count={data.get('user_count')}, api_request_limit={limit}); treating remaining=0")
+                        remaining = 0
+
+                    # Log normalized usage info for terminal + logs
+                    usage_parts = []
+                    for k in ('user_count', 'api_request_limit', 'api_requests_remaining'):
+                        if k in data:
+                            usage_parts.append(f"{k}={data.get(k)}")
+                    if usage_parts:
+                        logging.info("API Usage: " + ", ".join(usage_parts))
+                    if remaining is None:
+                        logging.debug("api_requests_remaining not available from FinMind; quota enforcement will use computed values when possible")
+
+                    # Enforce quota when we have a remaining value
+                    if isinstance(remaining, int) and remaining <= effective_cutoff:
+                        logging.warning(f"API requests remaining is low ({remaining} <= {effective_cutoff}) — skipping fetch to avoid hitting quota")
+                        parent_messages.append(f"Skipping fetch: remaining={remaining} <= cutoff={effective_cutoff}")
+
+                        # write parent-only temp log so operator can see why we skipped
+                        try:
+                            temp_log_dir = Path(temp_dir)
+                            temp_log_dir.mkdir(parents=True, exist_ok=True)
+                            fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
+                            with open(fetch_log, 'w', encoding='utf-8') as lf:
+                                lf.write('--- PARENT ---\n')
+                                lf.write("\n".join(parent_messages))
+                                lf.write("\n\n")
+                                lf.write('--- STDOUT ---\n')
+                                lf.write('')
+                                lf.write('\n--- STDERR ---\n')
+                                lf.write('')
+                            logging.info(f"Wrote parent-only batch_fetch log to {fetch_log} (skipped due to quota)")
+                        except Exception as _e:
+                            logging.warning(f"Unable to write parent-only batch_fetch log for {stock_id}: {_e}")
+
+                        return False
+
+                    # If we received a valid response, export token for child process
+                    if usage.get('ok'):
+                        env['FINMIND_API_KEY'] = token
+                        # also export reported remaining for downstream visibility
+                        if isinstance(remaining, int):
+                            env['FINMIND_API_REQUESTS_REMAINING'] = str(remaining)
             except Exception as e:
                 logging.warning(f"Failed to validate FINMIND_API_KEY (source: {token_source}): {e}")
         else:
             logging.warning('No FINMIND_API_KEY found in config, environment, or .env; batch_fetch may use cache-only')
 
-        result = subprocess.run(cmd, cwd=Path(__file__).parent.parent.parent, env=env, capture_output=True, text=True)
-        # Save fetch stdout/stderr into temp log for diagnosis
-        try:
-            temp_log_dir = Path(temp_dir)
-            temp_log_dir.mkdir(parents=True, exist_ok=True)
-            fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
-            with open(fetch_log, 'w', encoding='utf-8') as lf:
-                lf.write('--- STDOUT ---\n')
-                lf.write(result.stdout or '')
-                lf.write('\n--- STDERR ---\n')
-                lf.write(result.stderr or '')
-            logging.info(f"Saved batch_fetch logs to {fetch_log}")
-        except Exception as e:
-            logging.warning(f"Unable to write batch_fetch log for {stock_id}: {e}")
+        # Decide whether to stream child output in real time or capture-only
+        stream_child = bool(config.get('stream_child_output', False))
 
-        if result.returncode != 0:
-            logging.error(f"Batch fetch failed for {stock_id}: see {fetch_log} for details")
-            return False
-        logging.info(f"Batch fetch completed for {stock_id}")
-        return True
+        # Collect parent messages to always write into the temp log
+        parent_messages: list[str] = []
+
+        # predefine fetch_log so error paths can reference it safely
+        temp_log_dir = Path(temp_dir)
+        fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
+
+        # (Add parent messages from earlier checks if any were logged)
+        # Note: keep any usage_parts logged above — reproduce them into parent_messages
+        try:
+            if usage_parts:
+                parent_messages.append('Fetching API usage info...')
+                parent_messages.append('API Usage: ' + ', '.join(usage_parts))
+        except Exception:
+            pass
+
+        if not stream_child:
+            # Default behavior: capture child output and write to temp log after completion
+            result = subprocess.run(cmd, cwd=Path(__file__).parent.parent.parent, env=env, capture_output=True, text=True)
+            # Save fetch stdout/stderr into temp log for diagnosis
+            try:
+                temp_log_dir = Path(temp_dir)
+                temp_log_dir.mkdir(parents=True, exist_ok=True)
+                fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
+                with open(fetch_log, 'w', encoding='utf-8') as lf:
+                    # Write parent messages first for easier diagnosis
+                    if parent_messages:
+                        lf.write('--- PARENT ---\n')
+                        lf.write("\n".join(parent_messages))
+                        lf.write("\n\n")
+                    lf.write('--- STDOUT ---\n')
+                    lf.write(result.stdout or '')
+                    lf.write('\n--- STDERR ---\n')
+                    lf.write(result.stderr or '')
+                logging.info(f"Saved batch_fetch logs to {fetch_log}")
+            except Exception as e:
+                logging.warning(f"Unable to write batch_fetch log for {stock_id}: {e}")
+
+            if result.returncode != 0:
+                logging.error(f"Batch fetch failed for {stock_id}: see {fetch_log} for details")
+                return False
+            logging.info(f"Batch fetch completed for {stock_id}")
+            return True
+        else:
+            # Stream child stdout/stderr to terminal while also capturing to disk
+            from threading import Thread
+            import io
+
+            proc = subprocess.Popen(cmd, cwd=Path(__file__).parent.parent.parent, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout_buf = io.StringIO()
+            stderr_buf = io.StringIO()
+
+            def _reader(stream, buf, log_fn):
+                try:
+                    for line in iter(stream.readline, ''):
+                        if not line:
+                            break
+                        # Mirror to terminal
+                        log_fn(line.rstrip('\n'))
+                        # Capture
+                        buf.write(line)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            t_out = Thread(target=_reader, args=(proc.stdout, stdout_buf, logging.info), daemon=True)
+            t_err = Thread(target=_reader, args=(proc.stderr, stderr_buf, logging.error), daemon=True)
+            t_out.start()
+            t_err.start()
+            proc.wait()
+            t_out.join(timeout=1)
+            t_err.join(timeout=1)
+
+            # Persist combined log (parent + child)
+            try:
+                temp_log_dir = Path(temp_dir)
+                temp_log_dir.mkdir(parents=True, exist_ok=True)
+                fetch_log = temp_log_dir / f"batch_fetch_{stock_id}.log"
+                with open(fetch_log, 'w', encoding='utf-8') as lf:
+                    if parent_messages:
+                        lf.write('--- PARENT ---\n')
+                        lf.write("\n".join(parent_messages))
+                        lf.write("\n\n")
+                    lf.write('--- STDOUT ---\n')
+                    lf.write(stdout_buf.getvalue())
+                    lf.write('\n--- STDERR ---\n')
+                    lf.write(stderr_buf.getvalue())
+                logging.info(f"Saved batch_fetch logs to {fetch_log}")
+            except Exception as e:
+                logging.warning(f"Unable to write batch_fetch log for {stock_id}: {e}")
+
+            if proc.returncode != 0:
+                logging.error(f"Batch fetch failed for {stock_id}: see {fetch_log} for details")
+                return False
+            logging.info(f"Batch fetch completed for {stock_id}")
+            return True
     except Exception as e:
         logging.error(f"Error running batch fetch for {stock_id}: {e}")
         return False
@@ -334,10 +636,55 @@ def run_indicators(stock_id, config, data_dir, reports_dir):
             env['PLOTLY_RENDERER'] = 'svg'
             env['MPLBACKEND'] = 'Agg'
             env['ROBOT_NO_PLOT'] = '1'
-        with open(report_file, 'w', encoding='utf-8') as f:
-            result = subprocess.run(cmd, cwd=Path(__file__).parent.parent.parent, stdout=f, stderr=subprocess.PIPE, text=True, env=env)
-        if result.returncode != 0:
-            logging.error(f"Indicators failed for {stock_id}: {result.stderr}")
+        stream_child = bool(config.get('stream_child_output', False))
+        if not stream_child:
+            with open(report_file, 'w', encoding='utf-8') as f:
+                result = subprocess.run(cmd, cwd=Path(__file__).parent.parent.parent, stdout=f, stderr=subprocess.PIPE, text=True, env=env)
+            if result.returncode != 0:
+                logging.error(f"Indicators failed for {stock_id}: {result.stderr}")
+                return False
+            logging.info(f"Indicators completed for {stock_id}, report saved to {report_file}")
+            return True
+
+        # stream_child == True: stream indicator output to terminal AND write to report file
+        from threading import Thread
+        import io
+        proc = subprocess.Popen(cmd, cwd=Path(__file__).parent.parent.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+
+        def _reader(stream, buf, write_fn):
+            try:
+                for line in iter(stream.readline, ''):
+                    if not line:
+                        break
+                    write_fn(line.rstrip('\n'))
+                    buf.write(line)
+            except Exception:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        t_out = Thread(target=_reader, args=(proc.stdout, stdout_buf, logging.info), daemon=True)
+        t_err = Thread(target=_reader, args=(proc.stderr, stderr_buf, logging.error), daemon=True)
+        t_out.start()
+        t_err.start()
+        proc.wait()
+        t_out.join(timeout=1)
+        t_err.join(timeout=1)
+
+        # write the streamed output into the report file so behavior is identical
+        try:
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write(stdout_buf.getvalue())
+        except Exception as e:
+            logging.warning(f"Unable to write indicators report for {stock_id}: {e}")
+
+        if proc.returncode != 0:
+            logging.error(f"Indicators failed for {stock_id}: see {report_file}")
             return False
         logging.info(f"Indicators completed for {stock_id}, report saved to {report_file}")
         return True

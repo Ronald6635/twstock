@@ -23,5 +23,11 @@
         "macd_signal": 9
     },
     "analysis_days": 14,
+
+    "api_usage_threshold": 50,
+    "api_usage_threshold_unit": "absolute",
+    "api_retry_max": 3,
+    "stream_child_output": false,
+
     "interactive_plots": false
 }

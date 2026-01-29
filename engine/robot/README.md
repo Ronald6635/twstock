@@ -4,55 +4,95 @@ This directory contains the automated stock analysis robot that integrates data 
 
 ## Directory Structure
 - `automated_stock_robot.py`: Main robot script
-- `config.json`: Configuration file
+- `config.json`: Configuration file (JSON with optional JS-style comments supported)
 - `data/`: Processed data files
 - `reports/`: Individual stock analysis reports
-- `logs/`: Execution logs
+- `logs/`: Execution logs (robot-level)
 - `summary/`: Summary reports
-- `temp/`: Temporary files
+- `temp/`: Per-stock temporary files and child-run logs
 
-## Prerequisites
-- Python 3.10+ (virtual environment recommended)
-- FINMIND_API_KEY set in environment variables
-- Install dependencies:
-```bash
-python -m venv .venv
-source .venv/Scripts/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+## Key behaviour changes (quota, logging, streaming)
+- The robot queries FinMind's `/v2/user_info` to obtain quota information and logs it so you can see API usage in the terminal and log files.
+- `config.json` may contain `//` or `/* */` comments — the loader strips them before parsing.
 
-## Setup / Run
-1. Edit `config.json` to set desired stocks, dates, and parameters.
-2. Run the robot:
+### What you will see in logs
+- Robot (console + `logs/robot_*.log`):
+  - `Fetching API usage info...`
+  - `API Usage: user_count=550, api_request_limit=600, api_requests_remaining=523`
+  - Warnings when quota is low or when a fetch is skipped
+- Per-stock temp log: `engine/robot/temp/batch_fetch_<STOCKID>.log`
+  - `--- PARENT ---` — robot validation / usage messages (always written when relevant)
+  - `--- STDOUT ---` — child process stdout
+  - `--- STDERR ---` — child process stderr
+
+Note: when the robot skips a fetch due to quota, a parent-only `batch_fetch_<STOCKID>.log` is written explaining the reason.
+
+### Quota enforcement (precise)
+- Config knobs:
+  - `api_usage_threshold` (int, default 50)
+  - `api_usage_threshold_unit` (`"absolute"` | `"percent"`, default `"absolute"`)
+  - `api_retry_max` (int, default 3)
+- Semantics:
+  - absolute: treat `api_usage_threshold` as remaining-request cutoff (skip when remaining ≤ value).
+  - percent: convert configured percent to absolute using provider-reported limit (cutoff = ceil(limit * pct/100)). If the provider does not report a total limit, percent-mode falls back to treating the configured value as absolute and logs a warning.
+- Computed fallback:
+  - If FinMind does not provide `api_requests_remaining` but returns `user_count` and `api_request_limit`, the robot computes:
+    remaining = api_request_limit - user_count
+  - Negative remaining is treated as 0 (interpreted as over-quota).
+  - If remaining is available and remaining ≤ cutoff, the robot:
+    - Logs a WARNING,
+    - Writes a `--- PARENT ---` temp log with the computed remaining and skip reason,
+    - Skips running `scripts/batch_fetch.py` for that stock (returns False).
+  - If `remaining` is None (no usable quota info), the robot allows the fetch by default.
+
+### Retry / backoff
+- HTTP 429 responses from FinMind trigger retries with exponential backoff (honours `Retry-After` when provided). Controlled by `api_retry_max`.
+
+### Environment variables exported to child process
+- When validated, the robot exports to the child process environment:
+  - `FINMIND_API_KEY`
+  - `FINMIND_API_REQUESTS_REMAINING` (when available / computed)
+  - `ROBOT_API_USAGE_CUTOFF` (computed cutoff used by the robot)
+
+### Child-output streaming (`stream_child_output`)
+- Config key: `stream_child_output` (bool)
+  - false (default): robot captures child stdout/stderr and writes them to `engine/robot/temp/batch_fetch_<STOCKID>.log` after the child exits.
+  - true: robot streams child stdout/stderr to the terminal in real time *and* saves the same output to the temp log.
+  - Note: streaming output may interleave with robot logs in the terminal.
+
+## Quota examples (provider limit = 600)
+- `{"api_usage_threshold": 50, "api_usage_threshold_unit": "absolute"}`  
+  → skip when remaining ≤ 50 (used ≥ 550)
+- `{"api_usage_threshold": 10, "api_usage_threshold_unit": "percent"}`  
+  → cutoff = ceil(600 * 0.10) = 60 → skip when remaining ≤ 60
+- If FinMind returns `user_count=602, api_request_limit=600` and no explicit `api_requests_remaining`:
+  - robot computes remaining = -2 → treated as 0 → 0 ≤ cutoff → fetch skipped and `--- PARENT ---` log written
+
+## Quick checks / smoke tests
+- Run the robot and watch quota logging:
 ```bash
 python automated_stock_robot.py
+# look for "Fetching API usage info..." and "API Usage: ..." in terminal
+# inspect engine/robot/temp/batch_fetch_<STOCKID>.log for the --- PARENT --- section
 ```
-
-## Data layout & expected files
-- The robot looks for preprocessed files in `engine/datasets/{company}-{stock_id}/` with filenames like:
-  - `preprocessed_{company}-{stock_id}.json`
-  - `combined_*{stock_id}*.json` (used to generate preprocessed output)
-- As a fallback, it may read cache entries in `cache/{company}-{stock_id}/` such as:
-  - `2020-01-01_2026-01-28_finmind_taiwan_stock_price.json`
-- For indicators (e.g., SuperTrend) your preprocessed JSON / CSV must contain `high`, `low`, `close` columns and either a datetime index or a `Date` / `timestamp` column.
+- Test single-stock run:
+  - Edit `engine/robot/config.json` and set `"stocks": ["3518"]`
+  - Toggle streaming with `"stream_child_output": true` to see child output immediately
+- Simulate low-remaining behavior (example):
+  - Temporarily set FINMIND_API_REQUESTS_REMAINING env var (for local testing) and run the robot:
+    - PowerShell: $env:FINMIND_API_REQUESTS_REMAINING = "40"; python automated_stock_robot.py
 
 ## Troubleshooting
-- "No data found for <id>": create a matching `engine/datasets/{company}-{stock_id}` and add `preprocessed_*{stock_id}*.json` or place price JSON in `cache/{company}-{stock_id}/`.
-- "Missing columns" for indicators: ensure `high`, `low`, `close` are present in the preprocessed file.
-- To debug FinMind fetch issues, examine `engine/robot/temp/` for raw API dumps and logs in `logs/`.
-- Increase verbosity by checking the `logs/` directory or running subprocess commands locally to see stderr/stdout.
+- If a stock shows many `FAILED - 'data'` entries but the parent log shows `user_count > api_request_limit`, the robot now skips fetches in that situation — check `--- PARENT ---` in the temp log to confirm the skip reason.
+- Increase verbosity by inspecting `logs/robot_*.log`.
+- For CI/tests: run `pytest -q` from the repository root (tests add coverage for quota logic and streaming).
 
-## Testing
-- Run unit tests with pytest:
-```bash
-pytest -q
-```
-- Add small regression tests for indicator computation if modifying `engine/datasets/indicators.py`.
+## Configuration (summary)
+- `api_usage_threshold`: int (default 50)
+- `api_usage_threshold_unit`: "absolute" | "percent" (default "absolute")
+- `api_retry_max`: int (default 3)
+- `stream_child_output`: bool (default false)
 
-## Output
-- Individual reports in `reports/`
-- Summary in `summary/`
-- Logs in `logs/`
-
-## Contributing
+## Contributing / tests
+- Add regression tests for quota behaviour (examples included in repository tests).
 - Create a branch, add tests for new behavior, and open a pull request against `master`.
