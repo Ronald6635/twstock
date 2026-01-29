@@ -112,6 +112,21 @@ def load_config(config_path):
     # retry config
     cfg['api_retry_max'] = int(cfg.get('api_retry_max', 3))
 
+    # Throttle configuration (adaptive backoff between requests)
+    cfg['api_throttle_enabled'] = bool(cfg.get('api_throttle_enabled', False))
+    cfg['api_throttle_min_seconds'] = float(cfg.get('api_throttle_min_seconds', 1.0))
+    cfg['api_throttle_max_seconds'] = float(cfg.get('api_throttle_max_seconds', 10.0))
+    cfg['api_throttle_mode'] = str(cfg.get('api_throttle_mode', 'linear')).lower()
+    cfg['api_throttle_show_progress'] = bool(cfg.get('api_throttle_show_progress', True))
+
+    # Validation / sensible clamping for throttle values
+    if cfg['api_throttle_min_seconds'] < 0:
+        logging.warning('api_throttle_min_seconds < 0; clamping to 0')
+        cfg['api_throttle_min_seconds'] = 0.0
+    if cfg['api_throttle_max_seconds'] < cfg['api_throttle_min_seconds']:
+        logging.warning('api_throttle_max_seconds < api_throttle_min_seconds; adjusting to match min')
+        cfg['api_throttle_max_seconds'] = cfg['api_throttle_min_seconds']
+
     return cfg
 
 
@@ -133,6 +148,113 @@ def compute_effective_cutoff(api_usage_threshold: int, *, api_usage_threshold_un
             return int(ceil(api_limit * (api_usage_threshold / 100.0)))
         return int(api_usage_threshold)
     return int(api_usage_threshold)
+
+
+def compute_throttle_seconds(*, remaining: int | None, limit: int | None, cutoff: int, min_seconds: float = 1.0, max_seconds: float = 10.0, mode: str = 'linear') -> float:
+    """Map (remaining,limit,cutoff) -> throttle seconds.
+
+    - linear mode: remaining==cutoff -> max_seconds, remaining==limit -> min_seconds
+    - clamps to [min_seconds, max_seconds]
+    - if limit is missing, uses a conservative heuristic (smaller throttle)
+
+    Returns 0.0 when no throttle is needed or inputs are invalid.
+    """
+    try:
+        if remaining is None:
+            return 0.0
+        rem = float(remaining)
+        cut = float(cutoff)
+        min_s = float(min_seconds)
+        max_s = float(max_seconds)
+        if max_s <= 0 or min_s < 0:
+            return 0.0
+        if rem <= cut:
+            # caller will normally skip when rem <= cut; no throttle necessary here
+            return 0.0
+        # If we have an absolute limit, map rem in [cut, limit] -> [max_s, min_s]
+        if isinstance(limit, int) and limit > cut:
+            lim = float(limit)
+            # normalize between cutoff..limit
+            t = (rem - cut) / max((lim - cut), 1.0)
+            t = max(0.0, min(1.0, t))
+            if mode == 'linear':
+                return float(max_s + (min_s - max_s) * t)
+            # fallback to linear for unknown modes
+            return float(max_s + (min_s - max_s) * t)
+        else:
+            # No limit available: use a decreasing linear heuristic where larger remaining => smaller sleep
+            # Map rem in [cut, cut*5] -> [max_s, min_s]
+            span_top = max(cut * 5.0, cut + 1.0)
+            t = (rem - cut) / (span_top - cut)
+            t = max(0.0, min(1.0, t))
+            return float(max_s + (min_s - max_s) * t)
+    except Exception:
+        return 0.0
+
+
+def _sleep_with_progress(total_seconds: float, *, show: bool = True, label: str | None = None) -> None:
+    """Sleep while showing a terminal progress bar (non-blocking UI helper).
+
+    Implementation notes:
+    - Performs a single blocking time.sleep(total_seconds) in the caller so tests
+      that monkeypatch time.sleep still observe the expected call.
+    - A background thread updates the progress bar (uses Event.wait) and does not
+      add extra time.sleep calls that could break tests that assert a single sleep.
+    - If stdout is not a TTY or show is False, behaves like time.sleep(total_seconds).
+    """
+    import threading
+    import time
+    import sys
+
+    if total_seconds <= 0:
+        return
+    if not show or not sys.stdout.isatty():
+        time.sleep(total_seconds)
+        return
+
+    stop = threading.Event()
+
+    def _updater():
+        start = time.perf_counter()
+        last_print = ''
+        try:
+            while not stop.is_set():
+                elapsed = time.perf_counter() - start
+                remaining = max(0.0, total_seconds - elapsed)
+                frac = min(1.0, max(0.0, elapsed / max(total_seconds, 1e-6)))
+                bar_w = 30
+                filled = int(bar_w * frac)
+                bar = ('=' * filled) + ('>' if filled < bar_w else '') + (' ' * max(0, bar_w - filled - 1))
+                lbl = f" {label}:" if label else ''
+                s = f"{lbl} [{bar}] {remaining:5.1f}s remaining"
+                # only rewrite when changed to reduce terminal churn
+                if s != last_print:
+                    sys.stdout.write('\r' + s)
+                    sys.stdout.flush()
+                    last_print = s
+                # wait briefly without calling time.sleep in a tight loop
+                stop.wait(0.12)
+                if elapsed >= total_seconds:
+                    break
+        except Exception:
+            pass
+        finally:
+            # clear line and print a short confirmation
+            try:
+                sys.stdout.write('\r' + ' ' * (len(last_print) + 2) + '\r')
+                sys.stdout.write(f"{label or 'Waiting'}: done\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_updater, daemon=True)
+    t.start()
+    try:
+        # keep a single sleep call so existing tests that monkeypatch time.sleep still work
+        time.sleep(total_seconds)
+    finally:
+        stop.set()
+        t.join(timeout=0.5)
 
 
 def should_fetch_based_on_quota(remaining: int | None, limit: int | None, api_usage_threshold: int, api_usage_threshold_unit: str = 'absolute') -> bool:
@@ -339,6 +461,19 @@ def run_batch_fetch(stock_id: str, config: dict, temp_dir: Path) -> bool:
                             logging.warning(f"Unable to write parent-only batch_fetch log for {stock_id}: {_e}")
 
                         return False
+
+                    # Apply adaptive throttle when enabled and fetch is allowed
+                    api_throttle_enabled = bool(config.get('api_throttle_enabled', False))
+                    if api_throttle_enabled and isinstance(remaining, int) and remaining > effective_cutoff:
+                        min_s = float(config.get('api_throttle_min_seconds', 1.0))
+                        max_s = float(config.get('api_throttle_max_seconds', 10.0))
+                        mode = str(config.get('api_throttle_mode', 'linear')).lower()
+                        throttle = compute_throttle_seconds(remaining=remaining, limit=limit, cutoff=effective_cutoff, min_seconds=min_s, max_seconds=max_s, mode=mode)
+                        if throttle and throttle > 0:
+                            show_progress = bool(config.get('api_throttle_show_progress', True))
+                            logging.info(f"Applying adaptive throttle before fetching {stock_id}: sleeping {throttle:.1f}s (remaining={remaining}, cutoff={effective_cutoff})")
+                            env['ROBOT_API_THROTTLE_SECONDS'] = str(throttle)
+                            _sleep_with_progress(throttle, show=show_progress, label=f"Throttle {stock_id}")
 
                     # If we received a valid response, export token for child process
                     if usage.get('ok'):

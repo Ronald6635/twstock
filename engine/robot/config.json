@@ -22,12 +22,17 @@
         "macd_slow": 26,
         "macd_signal": 9
     },
-    "analysis_days": 14,
+    "analysis_days": 20,
 
-    "api_usage_threshold": 50,
+    "api_usage_threshold": 20,
     "api_usage_threshold_unit": "absolute",
     "api_retry_max": 3,
     "stream_child_output": false,
+
+    "api_throttle_enabled": true,
+    "api_throttle_min_seconds": 10.0,
+    "api_throttle_max_seconds": 60.0,
+    "api_throttle_mode": "linear",
 
     "interactive_plots": false
 }

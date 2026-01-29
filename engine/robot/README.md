@@ -48,6 +48,15 @@ Note: when the robot skips a fetch due to quota, a parent-only `batch_fetch_<STO
 ### Retry / backoff
 - HTTP 429 responses from FinMind trigger retries with exponential backoff (honours `Retry-After` when provided). Controlled by `api_retry_max`.
 
+### Throttle UI (progress bar)
+- When the robot applies an adaptive throttle before a fetch, a TTY-only progress bar is shown in the terminal so operators can see how many seconds remain before the next fetch.
+- Example (terminal):
+
+  Throttle 2330: [======>          ]  4.8s remaining
+
+- Controlled by `api_throttle_show_progress` (default: `true`). If stdout is not a TTY (CI or redirected output) the robot falls back to a plain sleep (no progress shown). The implementation preserves a single `time.sleep()` call so unit tests that monkeypatch `time.sleep` continue to work.
+- When throttling is applied the robot exports `ROBOT_API_THROTTLE_SECONDS` for downstream visibility.
+
 ### Environment variables exported to child process
 - When validated, the robot exports to the child process environment:
   - `FINMIND_API_KEY`
@@ -92,6 +101,11 @@ python automated_stock_robot.py
 - `api_usage_threshold_unit`: "absolute" | "percent" (default "absolute")
 - `api_retry_max`: int (default 3)
 - `stream_child_output`: bool (default false)
+- `api_throttle_enabled`: bool (default false) — enable adaptive throttling between fetches
+- `api_throttle_min_seconds`: number (default 1.0) — minimum throttle sleep when quota is healthy
+- `api_throttle_max_seconds`: number (default 10.0) — maximum throttle sleep when remaining is near cutoff
+- `api_throttle_mode`: string (default "linear") — mapping mode (currently `linear`)
+- `api_throttle_show_progress`: bool (default true) — show a terminal progress bar while sleeping (TTY only)
 
 ## Contributing / tests
 - Add regression tests for quota behaviour (examples included in repository tests).
