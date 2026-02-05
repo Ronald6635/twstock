@@ -24,15 +24,17 @@ logger = logging.getLogger(__name__)
 CSV_COLUMNS = [
     "stock_name",
     "stock_id",
-    "trend_summary",
-    "signal_divergence",
-    "volume_price",
+    "trend_reversal_detection",
+    "consistency_diagnosis",
+    "volume_price_divergence",
     "multi_ma",
-    "stoploss_takeprofit",
-    "key_levels",
+    "stoploss_takeprofit_reference",
+    "key_observation_levels",
     "event_risk",
-    "indicator_summary",
-    "advice",
+    "indicator_analysis_summary",
+    "signal_statistics",
+    "professional_advice",
+    "risk_management_advice",
     "stat_buy_strength",
     "stat_sell_strength",
     "stat_neutral",
@@ -40,14 +42,25 @@ CSV_COLUMNS = [
 ]
 
 # Encoding fallback order
-_ENCODING_FALLBACK = ("utf-8", "utf-8-sig", "big5", "latin-1")
+_ENCODING_FALLBACK: Tuple[str, ...] = ("utf-8", "utf-8-sig", "big5", "latin-1")
 
 # Helpful regexes
 _RE_COMPOSITE = re.compile(r"綜合評分\s*[:：]\s*([+\-]?\d+(?:\.\d+)?)")
 _RE_FILENAME_ID = re.compile(r"analysis_(?P<id>.+?)\.txt$")
 _RE_LOADED = re.compile(r"preprocessed[_-](?P<name>.+?)\.(?:json|csv)")
-_RE_SECTION_HEADING = re.compile(r"^\s*(?P<header>[^\n]{1,60}?)\s*[:：]\s*$")
+_RE_SECTION_HEADING = re.compile(r"^\s*(?P<header>[^\n]{1,60}?)\s*[:：]")
 _RE_STAT_KV = re.compile(r"(?P<key>買|賣|中性)[^\d\n\-]*?(?P<val>[+\-]?\d+(?:\.\d+)?)")
+
+
+def _normalize_section_header(header: str) -> str:
+    """Normalize section header text.
+
+    This reporter output often prefixes headings with emojis (e.g., "🛡️ ", "⚠️ ").
+    We strip leading non-word characters so mapping and filtering are stable.
+    """
+    header = header.strip()
+    header = re.sub(r"^[\s\W]+", "", header)
+    return header.strip()
 
 
 def _normalize_text(s: str) -> str:
@@ -82,10 +95,7 @@ class ReportParseError(RuntimeError):
 
 def _open_with_fallback(path: Path, encoding: Optional[str] = None) -> Tuple[str, str]:
     """Open file with encoding fallback; return (text, used_encoding)."""
-    if encoding:
-        encodings = (encoding,)
-    else:
-        encodings = _ENCODING_FALLBACK
+    encodings: Tuple[str, ...] = (encoding,) if encoding else _ENCODING_FALLBACK
 
     last_exc: Optional[Exception] = None
     for enc in encodings:
@@ -185,11 +195,22 @@ def parse_report_file(path: Path, *, encoding: Optional[str] = None, strict: boo
             continue
         # heading detection
         hm = _RE_SECTION_HEADING.match(L)
-        if hm and not L.lstrip().startswith("•"):
-            header = hm.group("header").strip()
+        is_emoji_heading = L.lstrip().startswith(("🔀", "🔍", "⚡", "📅", "🛡️", "🎯", "🚨", "📈", "💡"))
+        if (hm or is_emoji_heading) and not L.lstrip().startswith("•") and "理由" not in L and "部位規模" not in L and "當前價格" not in L:
+            if hm:
+                header = hm.group("header").strip()
+            else:
+                header = L.strip()
             header = header.replace("📈 ", "").replace("🔍 ", "")
+            header = _normalize_section_header(header)
             current = header
             sections.setdefault(current, [])
+            # Extract content after the colon on the same line
+            parts = L.split(':', 1)
+            if len(parts) > 1:
+                content = parts[1].strip()
+                if content:
+                    sections[current].append(content)
             continue
         # bullets or content
         if current:
@@ -201,7 +222,10 @@ def parse_report_file(path: Path, *, encoding: Optional[str] = None, strict: boo
         if "風險提醒" in k or "風險" == k:
             diagnostics.append(f"skipped_section:{k}")
             continue
-        cleaned_sections[k] = " | ".join(v).strip()
+        if "免責" in k or "免責聲明" in k:
+            diagnostics.append(f"skipped_section:{k}")
+            continue
+        cleaned_sections[k] = "\n".join(v).strip()
 
     # extract signal stats from a likely section name
     stat_buy = stat_sell = stat_neu = None
@@ -221,16 +245,28 @@ def parse_report_file(path: Path, *, encoding: Optional[str] = None, strict: boo
 
     # best-effort mapping of common section names to CSV columns
     mapping = {
-        "趨勢": "trend_summary",
-        "價格趨勢": "trend_summary",
-        "訊號分歧": "signal_divergence",
-        "訊號統計": "indicator_summary",
-        "成交量": "volume_price",
+        "趨勢反轉偵測": "trend_reversal_detection",
+        "一致性診斷": "consistency_diagnosis",
+        "量價同步": "volume_price_divergence",
+        "量價背離": "volume_price_divergence",
+        "量價結構": "volume_price_divergence",
         "多時框均線分析": "multi_ma",
-        "止損/停利": "stoploss_takeprofit",
-        "關鍵支撐/阻力": "key_levels",
+        "成交量": "volume_price_divergence",
+        "停損/停利參考": "stoploss_takeprofit_reference",
+        "止損/停利參考": "stoploss_takeprofit_reference",
+        "停損/停利": "stoploss_takeprofit_reference",
+        "止損/停利": "stoploss_takeprofit_reference",
+        "關鍵觀察價位": "key_observation_levels",
+        "關鍵支撐/阻力": "key_observation_levels",
         "事件風險": "event_risk",
-        "建議": "advice",
+        "基本面紅旗": "event_risk",
+        "指標分析摘要": "indicator_analysis_summary",
+        "訊號統計": "signal_statistics",
+        "📈 訊號統計": "signal_statistics",
+        "專業投資建議": "professional_advice",
+        "建議": "professional_advice",
+        "風險管理建議": "risk_management_advice",
+        "風險管理": "risk_management_advice",
     }
 
     row_sections: Dict[str, str] = {col: "" for col in CSV_COLUMNS}
@@ -240,15 +276,20 @@ def parse_report_file(path: Path, *, encoding: Optional[str] = None, strict: boo
     for sec, text in cleaned_sections.items():
         for pattern, col in mapping.items():
             if pattern in sec or pattern in text[:40]:
-                row_sections[col] = text
+                # Allow combining risk_management_advice if multiple sources
+                if col == "risk_management_advice" and row_sections[col]:
+                    if text and text not in row_sections[col]:
+                        row_sections[col] = row_sections[col] + "\n" + text
+                else:
+                    row_sections[col] = text
                 break
         else:
-            # put unmatched short headings into indicator_summary (append)
+            # unmatched - append to indicator_analysis_summary
             if len(text) < 200:
-                if row_sections["indicator_summary"]:
-                    row_sections["indicator_summary"] += " | " + f"{sec}: {text}"
+                if row_sections["indicator_analysis_summary"]:
+                    row_sections["indicator_analysis_summary"] += "\n" + f"{sec}: {text}"
                 else:
-                    row_sections["indicator_summary"] = f"{sec}: {text}"
+                    row_sections["indicator_analysis_summary"] = f"{sec}: {text}"
 
     result = ParseResult(
         stock_id=stock_id,
@@ -294,7 +335,7 @@ def export_reports_to_csv(
             if strict:
                 raise
             continue
-        row = {c: "" for c in CSV_COLUMNS}
+        row: Dict[str, Any] = {c: "" for c in CSV_COLUMNS}
         # populate known columns
         row.update(pr.sections)
         row["stock_id"] = pr.stock_id
@@ -338,6 +379,7 @@ def export_reports_to_csv(
                 cur = cur.parent
             return None
 
+        candidate: Optional[Path]
         if stockinfo_path:
             candidate = Path(stockinfo_path)
         else:

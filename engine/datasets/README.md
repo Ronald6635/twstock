@@ -8,6 +8,7 @@ This folder contains utility scripts for processing, analyzing, and machine lear
 - `preprocessing.py`: Merges and transforms raw FinMind API data into combined daily JSON/CSV files
 - `data_analysis.py`: Prepares pandas DataFrames and statistics from preprocessed data, including technical indicators
 - `data_visual.py`: Generates interactive Plotly charts from stock data
+- `indicators.py`: Technical indicators for financial analysis (SuperTrend, Moving Average, RSI, Stochastic, MACD, OBV)
 - `dict.md`: Field name dictionary for data columns
 
 ### Machine Learning Models
@@ -60,6 +61,18 @@ python data_analysis.py path/to/preprocessed.json
 
 # Generate interactive chart.html from preprocessed JSON
 python data_visual.py path/to/preprocessed.json --stock_id 2330
+```
+
+#### Technical Indicators
+```bash
+# Compute technical indicators with synthetic data (default parameters)
+python indicators.py
+
+# Compute SuperTrend with custom parameters
+python indicators.py --period 10 --multiplier 3.0
+
+# Load data from JSON file and compute indicators
+python indicators.py path/to/preprocessed.json --start_date 2024-01-01
 ```
 
 #### Machine Learning Pipeline

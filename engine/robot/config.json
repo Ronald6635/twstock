@@ -1,7 +1,7 @@
 {
     "api_key": "FINMIND_API_KEY",
     "start_date": "2020-01-01",
-    "end_date": "2026-01-28",
+    "end_date": "2026-02-06",
     "stocks": "all",
     "run_frequency": "daily",
     "output_dirs": {
@@ -20,7 +20,21 @@
         "stoch_d_period": 3,
         "macd_fast": 12,
         "macd_slow": 26,
-        "macd_signal": 9
+        "macd_signal": 9,
+
+        "use_fundamentals": true,
+        "margin_balance_key": "MarginPurchaseTodayBalance",
+
+        "score_weights": {
+            "SuperTrend": 2.0,
+            "MovingAverages": 1.0,
+            "MACD": 1.2,
+            "OBV": 0.6,
+            "RSI": 0.9,
+            "Stochastic": 0.8,
+            "MarginBalance": 0.75,
+            "ForeignInvestor": 0.5
+        }
     },
     "analysis_days": 20,
 
@@ -30,8 +44,8 @@
     "stream_child_output": false,
 
     "api_throttle_enabled": true,
-    "api_throttle_min_seconds": 10.0,
-    "api_throttle_max_seconds": 60.0,
+    "api_throttle_min_seconds": 2.0,
+    "api_throttle_max_seconds": 20.0,
     "api_throttle_mode": "linear",
 
     "interactive_plots": false

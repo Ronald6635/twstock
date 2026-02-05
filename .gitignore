@@ -103,8 +103,8 @@ ENV/
 
 # Emacs
 *~
-\#.*\#
-*.\#
+/#.*/#
+*./#
 
 # OS-specific
 .DS_Store
@@ -136,4 +136,6 @@ engine/robot/data/*.csv
 engine/robot/data/*.json
 engine/robot/reports/*.txt
 engine/robot/summary/
+engine/datasets/results.json
+engine/robot/reports/report_*.csv
 engine/datasets/results.json

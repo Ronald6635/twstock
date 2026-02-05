@@ -40,7 +40,163 @@ import logging
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
 
-__all__ = ["compute_supertrend", "compute_ma", "compute_rsi", "compute_stochastic", "compute_macd", "compute_obv"]
+__all__ = [
+    "compute_supertrend",
+    "compute_ma",
+    "compute_rsi",
+    "compute_stochastic",
+    "compute_macd",
+    "compute_obv",
+    "compute_adx",
+    "compute_momentum_metrics",
+    "generate_trading_analysis",
+]
+
+
+DEFAULT_SCORE_WEIGHTS: Dict[str, float] = {
+    "SuperTrend": 2.0,
+    "MovingAverages": 1.0,
+    "MACD": 1.2,
+    "OBV": 0.6,
+    "RSI": 0.9,
+    "Stochastic": 0.8,
+    "MarginBalance": 0.75,
+    "ForeignInvestor": 0.5,
+}
+
+TREND_MULTIPLIER_COMPONENTS: set[str] = {"SuperTrend", "MovingAverages", "MACD", "OBV"}
+
+
+def _load_score_weights_overrides(
+    *,
+    score_weights_json: Optional[str],
+    score_weights_file: Optional[str],
+) -> Optional[Dict[str, float]]:
+    """Load score weights overrides from CLI inputs.
+
+    Args:
+        score_weights_json: JSON string representing a dict of weight overrides.
+        score_weights_file: Path to a JSON file representing a dict of weight overrides.
+
+    Returns:
+        Dict[str, float] of weight overrides, or None if no overrides are provided
+        or parsing fails.
+    """
+    raw: Any = None
+
+    if score_weights_file:
+        try:
+            with open(score_weights_file, "r", encoding="utf-8-sig") as f:
+                raw = json.load(f)
+        except Exception as e:
+            logging.warning("Failed to load score weights file '%s': %s", score_weights_file, e)
+
+    if score_weights_json:
+        try:
+            raw = json.loads(score_weights_json)
+        except Exception as e:
+            logging.warning("Failed to parse score weights JSON: %s", e)
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        logging.warning("score_weights must be a JSON object/dict, got: %s", type(raw))
+        return None
+
+    overrides: Dict[str, float] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            weight = float(value)
+        except Exception:
+            logging.warning("Invalid weight for '%s': %r (ignored)", key, value)
+            continue
+        if not np.isfinite(weight) or weight <= 0:
+            logging.warning("Non-positive/invalid weight for '%s': %r (ignored)", key, value)
+            continue
+        overrides[key] = weight
+
+    return overrides or None
+
+
+def _series_to_float_list(series: pd.Series) -> list[float]:
+    """Convert a Series into a list[float] without NaNs.
+
+    Args:
+        series: Pandas Series to convert.
+
+    Returns:
+        List of float values with NaNs removed. Non-numeric values are coerced.
+    """
+    if series is None:
+        return []
+    try:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+    except Exception:
+        return []
+    return [float(x) for x in s.tolist()]
+
+
+def extract_fundamental_data_from_preprocessed_df(
+    df: pd.DataFrame,
+    *,
+    margin_balance_key: str = "MarginPurchaseTodayBalance",
+) -> Dict[str, Any]:
+    """Extract chip/fundamental fields from a preprocessed DataFrame.
+
+    This is intended for the robot pipeline where the preprocessed JSON
+    already contains forward-filled fundamentals and FinMind-ish chip keys.
+
+    Args:
+        df: Preprocessed DataFrame.
+        margin_balance_key: Column name used as the margin balance source.
+            Per dict.md, the canonical key is "MarginPurchaseTodayBalance".
+
+    Returns:
+        Dict compatible with generate_trading_analysis(fundamental_data=...).
+        Missing columns are omitted.
+    """
+    if df is None or df.empty:
+        return {}
+
+    fundamental_data: Dict[str, Any] = {}
+
+    # Fundamentals
+    if "eps" in df.columns:
+        fundamental_data["eps"] = _series_to_float_list(df["eps"])
+    if "eps_basic" in df.columns and "eps" not in fundamental_data:
+        fundamental_data["eps"] = _series_to_float_list(df["eps_basic"])
+    if "revenue" in df.columns:
+        fundamental_data["revenue"] = _series_to_float_list(df["revenue"])
+    if "daily_revenue" in df.columns:
+        fundamental_data["daily_revenue"] = _series_to_float_list(df["daily_revenue"])
+    if "gross_profit" in df.columns:
+        fundamental_data["gross_profit"] = _series_to_float_list(df["gross_profit"])
+
+    # Chips / flow
+    if "foreign_investor_net" in df.columns:
+        fundamental_data["foreign_investor_net"] = _series_to_float_list(df["foreign_investor_net"])
+    if "investment_trust_net" in df.columns:
+        fundamental_data["investment_trust_net"] = _series_to_float_list(df["investment_trust_net"])
+    if "dealer_net" in df.columns:
+        fundamental_data["dealer_net"] = _series_to_float_list(df["dealer_net"])
+
+    # Margin / short (keyed off dict.md)
+    if margin_balance_key in df.columns:
+        fundamental_data["margin_balance"] = _series_to_float_list(df[margin_balance_key])
+    if "MarginPurchaseYesterdayBalance" in df.columns:
+        fundamental_data["margin_yesterday_balance"] = _series_to_float_list(df["MarginPurchaseYesterdayBalance"])
+    if "MarginPurchaseBalanceChange" in df.columns:
+        fundamental_data["margin_balance_change"] = _series_to_float_list(df["MarginPurchaseBalanceChange"])
+    if "ShortSaleTodayBalance" in df.columns:
+        fundamental_data["short_today_balance"] = _series_to_float_list(df["ShortSaleTodayBalance"])
+    if "ShortSaleYesterdayBalance" in df.columns:
+        fundamental_data["short_yesterday_balance"] = _series_to_float_list(df["ShortSaleYesterdayBalance"])
+    if "ShortSaleBalanceChange" in df.columns:
+        fundamental_data["short_balance_change"] = _series_to_float_list(df["ShortSaleBalanceChange"])
+
+    return fundamental_data
 
 
 def compute_supertrend(
@@ -302,35 +458,185 @@ def compute_obv(df: pd.DataFrame, volume_col: str = "volume", close_col: str = "
             obv.iloc[i] = obv.iloc[i-1]
     return obv
 
-def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame, period: int, multiplier: float) -> None:
-    """
-    Generate comprehensive trading analysis summary for the last 2 weeks.
 
-    Analyzes all technical indicators and provides buy/sell recommendations
-    based on the most recent signals and trends.
+def compute_adx(
+    df: pd.DataFrame,
+    period: int = 14,
+    high_col: str = "high",
+    low_col: str = "low",
+    close_col: str = "close",
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    計算 ADX (Average Directional Index) 指標及其分量 +DI, -DI。
+
+    ADX 衡量趨勢強度 (0-100)，值越高表示趨勢越明顯:
+    - ADX > 25: 強勁趨勢
+    - ADX 20-25: 中等趨勢
+    - ADX < 20: 弱或無趨勢
 
     Args:
-        results_df: DataFrame containing all computed indicators
-        sample_df: Original price data DataFrame
-        period: ATR period used for SuperTrend
-        multiplier: ATR multiplier used for SuperTrend
+        df: 包含價格數據的 DataFrame
+        period: ADX 計算期間，通常為 14
+        high_col: 最高價欄位名稱
+        low_col: 最低價欄位名稱
+        close_col: 收盤價欄位名稱
+
+    Returns:
+        tuple: (adx_series, plus_di, minus_di)
+        - adx_series: ADX 值 (0-100)
+        - plus_di: +DI (正向指數)
+        - minus_di: -DI (負向指數)
+
+    Raises:
+        KeyError: 若缺少必要欄位
+    """
+    for c in (high_col, low_col, close_col):
+        if c not in df.columns:
+            raise KeyError(f"Missing required column: {c}")
+
+    n = len(df)
+    if n < period + 1:
+        return pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index)
+
+    high = df[high_col].astype(float).values
+    low = df[low_col].astype(float).values
+    close = df[close_col].astype(float).values
+
+    # 計算 True Range (用於 ATR)
+    tr = np.zeros(n)
+    for i in range(1, n):
+        tr[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i-1]),
+            abs(low[i] - close[i-1])
+        )
+    tr[0] = high[0] - low[0]
+
+    # 計算 Directional Movement
+    plus_dm = np.zeros(n)
+    minus_dm = np.zeros(n)
+    for i in range(1, n):
+        up = high[i] - high[i-1]
+        down = low[i-1] - low[i]
+        if up > down and up > 0:
+            plus_dm[i] = up
+        if down > up and down > 0:
+            minus_dm[i] = down
+
+    # 使用 Wilder's Smoothing
+    plus_dm_smooth = np.zeros(n)
+    minus_dm_smooth = np.zeros(n)
+    atr = np.zeros(n)
+
+    # 初始化：取前 period 天的和
+    plus_dm_smooth[period-1] = np.sum(plus_dm[:period])
+    minus_dm_smooth[period-1] = np.sum(minus_dm[:period])
+    atr[period-1] = np.sum(tr[:period])
+
+    # Wilder's Smoothing：新值 = 舊值 - 舊值/period + 新值
+    for i in range(period, n):
+        plus_dm_smooth[i] = plus_dm_smooth[i-1] - plus_dm_smooth[i-1]/period + plus_dm[i]
+        minus_dm_smooth[i] = minus_dm_smooth[i-1] - minus_dm_smooth[i-1]/period + minus_dm[i]
+        atr[i] = atr[i-1] - atr[i-1]/period + tr[i]
+
+    # 計算 DI
+    with np.errstate(divide='ignore', invalid='ignore'):
+        plus_di = 100 * plus_dm_smooth / atr
+        minus_di = 100 * minus_dm_smooth / atr
+
+    # 計算 DX 和 ADX
+    di_sum = plus_di + minus_di
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dx = 100 * np.abs(plus_di - minus_di) / di_sum
+
+    # ADX 為 DX 的 Wilder's Smoothing
+    adx = np.zeros(n)
+    adx[2*period-2] = np.mean(dx[period-1:2*period-1])
+    for i in range(2*period-1, n):
+        adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
+
+    # 轉換為 Series
+    adx_series = pd.Series(adx, index=df.index, dtype=float)
+    plus_di_series = pd.Series(plus_di, index=df.index, dtype=float)
+    minus_di_series = pd.Series(minus_di, index=df.index, dtype=float)
+
+    return adx_series, plus_di_series, minus_di_series
+
+
+def compute_momentum_metrics(results_df: pd.DataFrame) -> Dict[str, float]:
+    """
+    計算動量相關指標，用於動態加權系統。
+
+    Returns:
+        dict: 包含波動率、趨勢強度、訊號可信度等指標
+    """
+    metrics = {}
+
+    # 波動率指標：最近 14 天的日報酬標準差
+    if len(results_df) >= 14:
+        returns = results_df['close'].pct_change().tail(14)
+        metrics['volatility'] = returns.std()
+    else:
+        metrics['volatility'] = 0
+
+    # ADX 值（趨勢強度）
+    if 'adx' in results_df.columns:
+        metrics['adx'] = results_df['adx'].iloc[-1]
+    else:
+        metrics['adx'] = 0
+
+    # MACD 柱狀圖動能（加速度）
+    if 'macd_histogram' in results_df.columns and len(results_df) >= 2:
+        curr_hist = results_df['macd_histogram'].iloc[-1]
+        prev_hist = results_df['macd_histogram'].iloc[-2]
+        metrics['macd_momentum'] = curr_hist - prev_hist
+    else:
+        metrics['macd_momentum'] = 0
+
+    return metrics
+
+
+def generate_trading_analysis(
+    results_df: pd.DataFrame,
+    sample_df: pd.DataFrame,
+    period: int,
+    multiplier: float,
+    fundamental_data: Optional[Dict[str, Any]] = None,
+    analysis_days: int = 14,
+    score_weights: Optional[Dict[str, float]] = None,
+) -> None:
+    """
+    產生完整的交易分析報告，結合技術指標、籌碼面和基本面信號。
+
+    分析最近 14 個交易日的所有技術指標，評估籌碼面信號強度，
+    檢查基本面紅旗，並提供買賣建議。
+
+    Args:
+        results_df: 包含所有計算指標的 DataFrame
+        sample_df: 原始價格數據 DataFrame
+        period: SuperTrend 的 ATR 期間
+        multiplier: SuperTrend 的 ATR 倍數
+        fundamental_data: 可選，包含營收、EPS、融資融券等基本面數據的字典
+                         格式: {"eps": [values], "revenue": [values], ...}
+        score_weights: 可選，綜合評分的權重覆寫 dict。
+            例如: {"SuperTrend": 1.5, "RSI": 0.7}。
     """
     print("\n" + "="*80)
     print("📊 技術指標專業分析報告 (最近兩周)")
     print("="*80)
 
-    # Get last 14 trading days (approximately 2 weeks)
-    recent_data = results_df.tail(14)
-    recent_prices = sample_df.tail(14)
+    # Get last N trading days (default: 14, approximately 2 weeks)
+    safe_days = int(analysis_days) if isinstance(analysis_days, int) and analysis_days > 0 else 14
+    recent_data = results_df.tail(safe_days)
+    recent_prices = sample_df.tail(safe_days)
     if len(recent_data) < 7:
         print("⚠️  數據不足，無法進行完整分析")
         return
 
-    buy_signals = 0
-    sell_signals = 0
-    neutral_signals = 0
+    buy_signals = 0.0
+    sell_signals = 0.0
+    neutral_signals = 0.0
     analysis_points = []
-    section_points = []
 
     # ⚡ 趨勢反轉偵測
     trend_reversal_msgs = []
@@ -353,36 +659,53 @@ def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame,
         for msg in trend_reversal_msgs:
             print(f"   • {msg}")
 
-    # 🔀 訊號一致性/分歧
+    # 🔀 訊號一致性/分歧 - 7 層指標 (技術5 + 籌碼2)
     signal_votes = []
+    signal_components = {}  # 記錄各分量
+
+    # === 技術面信號層 (5 個) ===
     # SuperTrend
     latest_direction = st_dir.iloc[-1]
     signal_votes.append(latest_direction)
+    signal_components['SuperTrend'] = latest_direction
+
     # RSI
     latest_rsi = rsi.iloc[-1]
     if latest_rsi > 70:
         signal_votes.append(-1)
+        signal_components['RSI'] = -1
     elif latest_rsi < 30:
         signal_votes.append(1)
+        signal_components['RSI'] = 1
     else:
         signal_votes.append(0)
+        signal_components['RSI'] = 0
+
     # Stochastic
     stoch_k = recent_data['stoch_k']
     latest_stoch_k = stoch_k.iloc[-1]
     if latest_stoch_k > 80:
         signal_votes.append(-1)
+        signal_components['Stochastic'] = -1
     elif latest_stoch_k < 20:
         signal_votes.append(1)
+        signal_components['Stochastic'] = 1
     else:
         signal_votes.append(0)
+        signal_components['Stochastic'] = 0
+
     # MACD
     latest_histogram = macd_hist.iloc[-1]
     if latest_histogram > 0:
         signal_votes.append(1)
+        signal_components['MACD'] = 1
     elif latest_histogram < 0:
         signal_votes.append(-1)
+        signal_components['MACD'] = -1
     else:
         signal_votes.append(0)
+        signal_components['MACD'] = 0
+
     # 均線
     latest_price = recent_prices['close'].iloc[-1]
     latest_ma20 = recent_data['ma_20'].iloc[-1]
@@ -390,13 +713,107 @@ def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame,
     latest_ma120 = recent_data['ma_120'].iloc[-1]
     ma_vote = 1 if (latest_price > latest_ma20 and latest_price > latest_ma60 and latest_price > latest_ma120) else -1 if (latest_price < latest_ma20 and latest_price < latest_ma60 and latest_price < latest_ma120) else 0
     signal_votes.append(ma_vote)
-    # 一致性判斷
-    if abs(sum(signal_votes)) == len(signal_votes):
-        print("\n✅ 訊號高度一致: 所有指標同向")
-    elif abs(sum(signal_votes)) >= len(signal_votes) - 1:
-        print("\n☑️ 訊號大致一致: 多數指標同向")
+    signal_components['MovingAverages'] = ma_vote
+
+    # === 籌碼面信號層 (2 個) ===
+    margin_signal = 0
+    foreign_signal = 0
+
+    if fundamental_data:
+        # 升級：融資信號 = 融資/股本比 + 加速度 + 成交量確認
+        if 'margin_balance' in fundamental_data and len(fundamental_data['margin_balance']) >= 7:
+            margin_balance = fundamental_data['margin_balance']
+            
+            # 計算融資/股本比
+            margin_ratio = None
+            if 'equity_capital' in fundamental_data and len(fundamental_data['equity_capital']) >= 7:
+                # 融資/股本比 (衡量散戶槓桿程度)
+                latest_equity = fundamental_data['equity_capital'][-1] if fundamental_data['equity_capital'][-1] > 0 else 1
+                margin_ratio = margin_balance[-1] / latest_equity
+                prev_margin_ratio = margin_balance[-7] / (fundamental_data['equity_capital'][-7] if fundamental_data['equity_capital'][-7] > 0 else 1)
+                margin_ratio_trend = margin_ratio > prev_margin_ratio  # 比例增加 = 散戶槓桿增加
+            else:
+                # Fallback: 絕對餘額趨勢
+                margin_ratio_trend = margin_balance[-1] > margin_balance[-7]
+            
+            # 計算融資加速度 (2階微分)
+            # 加速度 = 當期變化 - 前期變化
+            margin_accel = 0.0
+            if len(margin_balance) >= 14:
+                # 最近 7 天變化
+                recent_change = margin_balance[-1] - margin_balance[-7]
+                # 前 7 天變化
+                prev_change = margin_balance[-7] - margin_balance[-14]
+                margin_accel = recent_change - prev_change
+                # 加速度 > 0: 增加速度在加快; < 0: 增加速度在減慢 (或轉為減少)
+            
+            # 成交量確認 (可選，來自 sample_df)
+            volume_confirm = True
+            if 'volume' in sample_df.columns and len(sample_df) > 0:
+                # 計算最近 20 日平均成交量
+                recent_volumes = sample_df['volume'].tail(20)
+                avg_volume_20 = recent_volumes.mean() if len(recent_volumes) > 0 else 0
+                latest_volume = sample_df['volume'].iloc[-1] if len(sample_df) > 0 else 0
+                # 當融資信號出現 + 大成交量 (> 平均 120%) → 提高可靠性
+                volume_confirm = latest_volume > avg_volume_20 * 1.2
+            
+            # 融資信號融合邏輯
+            # 如果:
+            # 1. 融資/股本比上升（散戶槓桿增加）+ 加速度 > 0 (速度加快) → 強反轉訊號 = -2
+            # 2. 融資/股本比上升（散戶槓桿增加）+ 加速度 <= 0 (速度減慢) → 弱反轉訊號 = -1
+            # 3. 融資/股本比下降（散戶槓桿減少）→ 繼續訊號 = +1
+            if margin_ratio_trend:  # 融資增加
+                if margin_accel > 0:  # 加速度正 = 增加速度加快
+                    # 強反轉訊號：量能確認時給更強負權重
+                    margin_signal = -2 if volume_confirm else -1
+                else:  # 加速度 <= 0 = 增加速度減慢
+                    margin_signal = -1  # 減弱但仍是反轉訊號
+            else:  # 融資減少 = 主力掌控
+                margin_signal = 1
+            
+        signal_votes.append(margin_signal)
+        signal_components['MarginBalance'] = margin_signal
+
+        # 外資買賣超
+        if 'foreign_investor_net' in fundamental_data and len(fundamental_data['foreign_investor_net']) >= 7:
+            foreign_trend = fundamental_data['foreign_investor_net'][-1] > fundamental_data['foreign_investor_net'][-7]
+            foreign_signal = 1 if foreign_trend else -1  # 外資買入 = 利多
+        signal_votes.append(foreign_signal)
+        signal_components['ForeignInvestor'] = foreign_signal
+
+        # 分數計算改為統一在後段「加權打分制」處理
+
+    # 計算同向指標數量
+    positive_votes = sum(1 for v in signal_votes if v > 0)
+    negative_votes = sum(1 for v in signal_votes if v < 0)
+    total_indicators = len(signal_votes)
+
+    from math import ceil
+
+    required_consensus = int(ceil(0.6 * total_indicators)) if total_indicators > 0 else 0
+    required_consensus = max(required_consensus, 1)
+    weak_consensus = max(required_consensus - 1, 1)
+
+    # 新的確認邏輯：需 ⌈0.6N⌉ 指標同向 + ADX > 25
+    adx_value = recent_data['adx'].iloc[-1] if 'adx' in recent_data.columns else 0
+    trend_strength_ok = adx_value > 25
+
+    print(f"\n🔀 一致性診斷 (ADX={adx_value:.1f}, 趨勢強度: {'✅ 強勁' if trend_strength_ok else '⚠️ 較弱'})")
+    print("   • 決策模式: ✅ 加權打分制 (以下為一致性診斷)")
+    print(
+        f"   • 同向指標: {max(positive_votes, negative_votes)}/{total_indicators} "
+        f"(門檻: {required_consensus}/{total_indicators} = ⌈0.6N⌉)"
+    )
+    print(f"   • 一致性評語: ", end="")
+
+    if max(positive_votes, negative_votes) >= required_consensus and trend_strength_ok:
+        print("一致性高（趨勢強）")
+    elif max(positive_votes, negative_votes) >= required_consensus:
+        print("一致性高（趨勢弱）")
+    elif max(positive_votes, negative_votes) >= weak_consensus:
+        print("一致性中")
     else:
-        print("\n🔀 訊號分歧: 多空訊號交錯，建議保守")
+        print("一致性低")
 
     # 🔎 量價結構
     if 'obv' in results_df.columns:
@@ -415,22 +832,16 @@ def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame,
     ma_signals = []
     if latest_price > latest_ma20:
         ma_signals.append("短期(>MA20)上漲")
-        buy_signals += 0.5
     else:
         ma_signals.append("短期(<MA20)下跌")
-        sell_signals += 0.5
     if latest_price > latest_ma60:
         ma_signals.append("中期(>MA60)上漲")
-        buy_signals += 0.5
     else:
         ma_signals.append("中期(<MA60)下跌")
-        sell_signals += 0.5
     if latest_price > latest_ma120:
         ma_signals.append("長期(>MA120)上漲")
-        buy_signals += 1
     else:
         ma_signals.append("長期(<MA120)下跌")
-        sell_signals += 1
     print("   • " + ", ".join(ma_signals))
     if ma_vote == 1:
         print("   → 三線同多，趨勢強勁")
@@ -481,52 +892,81 @@ def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame,
     # SuperTrend
     supertrend_signal = "買入" if latest_direction == 1 else "賣出"
     analysis_points.append(f"SuperTrend趨勢: {supertrend_signal}訊號 (Period={period}, Multiplier={multiplier})")
-    if latest_direction == 1:
-        buy_signals += 2
-    else:
-        sell_signals += 2
     # RSI
     rsi_overbought = (rsi > 70).sum()
     rsi_oversold = (rsi < 30).sum()
     if latest_rsi > 70:
         analysis_points.append(f"RSI指標: 超買區間 ({latest_rsi:.1f}) - 賣出訊號")
-        sell_signals += 1
     elif latest_rsi < 30:
         analysis_points.append(f"RSI指標: 超賣區間 ({latest_rsi:.1f}) - 買入訊號")
-        buy_signals += 1
     else:
         analysis_points.append(f"RSI指標: 正常區間 ({latest_rsi:.1f})")
-        neutral_signals += 1
     # Stochastic
     latest_stoch_d = recent_data['stoch_d'].iloc[-1]
     if latest_stoch_k > 80:
         analysis_points.append(f"Stochastic: 超買區間 (K:{latest_stoch_k:.1f}, D:{latest_stoch_d:.1f}) - 賣出訊號")
-        sell_signals += 1
     elif latest_stoch_k < 20:
         analysis_points.append(f"Stochastic: 超賣區間 (K:{latest_stoch_k:.1f}, D:{latest_stoch_d:.1f}) - 買入訊號")
-        buy_signals += 1
     else:
         analysis_points.append(f"Stochastic: 正常區間 (K:{latest_stoch_k:.1f}, D:{latest_stoch_d:.1f})")
-        neutral_signals += 1
     # MACD
     latest_macd = recent_data['macd'].iloc[-1]
     latest_signal = recent_data['macd_signal'].iloc[-1]
     macd_trend = "上漲動能" if latest_macd > 0 else "下跌動能"
     macd_signal_strength = "買入訊號" if latest_histogram > 0 else "賣出訊號"
     analysis_points.append(f"MACD: {macd_trend}, 柱狀圖顯示{macd_signal_strength}")
-    if latest_histogram > 0:
-        buy_signals += 1
-    else:
-        sell_signals += 1
     # OBV
     if 'obv' in results_df.columns:
         obv_trend = recent_data['obv'].iloc[-1] > recent_data['obv'].iloc[-7]
         if obv_trend:
             analysis_points.append("OBV成交量: 上升趨勢，確認價格上漲")
-            buy_signals += 0.5
         else:
             analysis_points.append("OBV成交量: 下降趨勢，確認價格下跌")
-            sell_signals += 0.5
+
+    # ADX 趨勢強度
+    if 'adx' in recent_data.columns:
+        adx_val = recent_data['adx'].iloc[-1]
+        if adx_val > 25:
+            analysis_points.append(f"ADX趨勢強度: {adx_val:.1f} (強勁趨勢)")
+        elif adx_val > 20:
+            analysis_points.append(f"ADX趨勢強度: {adx_val:.1f} (中等趨勢)")
+        else:
+            analysis_points.append(f"ADX趨勢強度: {adx_val:.1f} (弱趨勢)")
+
+    # 籌碼面訊號
+    if fundamental_data:
+        if 'margin_balance' in fundamental_data and len(fundamental_data['margin_balance']) >= 7:
+            margin_balance = fundamental_data['margin_balance']
+            margin_trend = margin_balance[-1] > margin_balance[-7]
+            
+            # 計算融資/股本比 (新)
+            margin_ratio_val = None
+            margin_ratio_trend_val = None
+            if 'equity_capital' in fundamental_data and len(fundamental_data['equity_capital']) >= 7:
+                latest_equity = fundamental_data['equity_capital'][-1] if fundamental_data['equity_capital'][-1] > 0 else 1
+                margin_ratio_val = margin_balance[-1] / latest_equity
+                prev_margin_ratio = margin_balance[-7] / (fundamental_data['equity_capital'][-7] if fundamental_data['equity_capital'][-7] > 0 else 1)
+                margin_ratio_trend_val = margin_ratio_val > prev_margin_ratio
+                analysis_points.append(f"融資/股本比: {margin_ratio_val:.4f} ({'上升⚠️' if margin_ratio_trend_val else '下降✓'})")
+            
+            # 計算融資加速度 (新)
+            margin_accel = None
+            if len(margin_balance) >= 14:
+                recent_change = margin_balance[-1] - margin_balance[-7]
+                prev_change = margin_balance[-7] - margin_balance[-14]
+                margin_accel = recent_change - prev_change
+                accel_status = "加速增加⚠️⚠️" if margin_accel > 0 else "增加減緩" if margin_accel < 0 and recent_change > 0 else "持續減少✓"
+                analysis_points.append(f"融資加速度: {margin_accel:+.0f} ({accel_status})")
+            
+            # 整體融資狀態
+            margin_status = "上升（警戒）" if margin_trend else "下降（樂觀）"
+            analysis_points.append(f"融資餘額: {margin_status}")
+
+        if 'foreign_investor_net' in fundamental_data and len(fundamental_data['foreign_investor_net']) >= 1:
+            foreign_val = fundamental_data['foreign_investor_net'][-1]
+            foreign_status = "買入" if foreign_val > 0 else "賣出"
+            analysis_points.append(f"外資動向: 淨{foreign_status} {abs(foreign_val):.0f}")
+
     # 價格趨勢
     price_trend = recent_prices['close'].iloc[-1] > recent_prices['close'].iloc[0]
     price_change_pct = ((recent_prices['close'].iloc[-1] - recent_prices['close'].iloc[0]) / recent_prices['close'].iloc[0]) * 100
@@ -534,45 +974,183 @@ def generate_trading_analysis(results_df: pd.DataFrame, sample_df: pd.DataFrame,
         analysis_points.append(f"價格趨勢: 上漲 {price_change_pct:.1f}%")
     else:
         analysis_points.append(f"價格趨勢: 下跌 {price_change_pct:.1f}%")
+
     for point in analysis_points:
         print(f"   • {point}")
 
-    # 綜合評分
-    total_score = buy_signals - sell_signals
+    # === 基本面紅旗檢查 ===
+    fundamental_warning = []
+    if fundamental_data:
+        # EPS 衰退
+        if 'eps' in fundamental_data and len(fundamental_data['eps']) >= 4:
+            eps_decline = fundamental_data['eps'][-1] < fundamental_data['eps'][-4]
+            if eps_decline:
+                fundamental_warning.append("⚠️ EPS 同比衰退")
+
+        # 營收衰退
+        if 'revenue' in fundamental_data and len(fundamental_data['revenue']) >= 7:
+            revenue_decline = fundamental_data['revenue'][-1] < fundamental_data['revenue'][-7]
+            if revenue_decline:
+                fundamental_warning.append("⚠️ 月營收衰退")
+
+        # 毛利率下滑
+        if 'gross_profit' in fundamental_data and len(fundamental_data['gross_profit']) >= 4:
+            if fundamental_data['gross_profit'][-1] is not None and fundamental_data['gross_profit'][-4] is not None:
+                gp_decline = fundamental_data['gross_profit'][-1] < fundamental_data['gross_profit'][-4]
+                if gp_decline:
+                    fundamental_warning.append("⚠️ 毛利率下滑")
+
+    if fundamental_warning:
+        print("\n🚨 基本面紅旗:")
+        for warning in fundamental_warning:
+            print(f"   {warning}")
+
+    # === 加權打分制：綜合評分/信心分數（唯一決策來源） ===
+    # 以 (signal × weight) 合成 total_score，並以理論最大分數做歸一化
+    trend_multiplier = 1.2 if trend_strength_ok else 1.0
+
+    weights = dict(DEFAULT_SCORE_WEIGHTS)
+    applied_overrides: Dict[str, float] = {}
+    if score_weights:
+        for name, weight in score_weights.items():
+            if not isinstance(name, str):
+                continue
+            try:
+                w = float(weight)
+            except Exception:
+                continue
+            if not np.isfinite(w) or w <= 0:
+                continue
+            weights[name] = w
+            applied_overrides[name] = w
+
+    if applied_overrides:
+        pretty = ", ".join(f"{k}={v:.2f}" for k, v in sorted(applied_overrides.items()))
+        print(f"\n🎛️ 權重覆寫: {pretty}")
+
+    def _get_component_weight(component_name: str) -> float:
+        base_weight = float(weights.get(component_name, 1.0))
+        if component_name in TREND_MULTIPLIER_COMPONENTS:
+            return base_weight * trend_multiplier
+        return base_weight
+
+    score_components: list[tuple[str, float, float, float]] = []
+    # tuple: (name, signal, weight, max_abs_signal)
+
+    # SuperTrend（趨勢型；ADX 強時放大權重）
+    score_components.append(("SuperTrend", float(latest_direction), _get_component_weight("SuperTrend"), 1.0))
+
+    # MA 多時框（短/中/長期；ADX 強時放大權重）
+    ma_signal_value = (
+        (0.5 if latest_price > latest_ma20 else -0.5)
+        + (0.5 if latest_price > latest_ma60 else -0.5)
+        + (1.0 if latest_price > latest_ma120 else -1.0)
+    )
+    score_components.append(("MovingAverages", float(ma_signal_value), _get_component_weight("MovingAverages"), 2.0))
+
+    # MACD（趨勢型；ADX 強時放大權重）
+    macd_signal_val = 1.0 if latest_histogram > 0 else -1.0 if latest_histogram < 0 else 0.0
+    score_components.append(("MACD", float(macd_signal_val), _get_component_weight("MACD"), 1.0))
+
+    # OBV（趨勢型；有資料才納入；ADX 強時放大權重）
+    if 'obv' in results_df.columns and len(recent_data) >= 7:
+        obv_signal_val = 1.0 if recent_data['obv'].iloc[-1] > recent_data['obv'].iloc[-7] else -1.0
+        score_components.append(("OBV", float(obv_signal_val), _get_component_weight("OBV"), 1.0))
+
+    # RSI / Stochastic（擺盪型；不因 ADX 放大）
+    rsi_signal_val = 1.0 if latest_rsi < 30 else -1.0 if latest_rsi > 70 else 0.0
+    score_components.append(("RSI", float(rsi_signal_val), _get_component_weight("RSI"), 1.0))
+    stoch_signal_val = 1.0 if latest_stoch_k < 20 else -1.0 if latest_stoch_k > 80 else 0.0
+    score_components.append(("Stochastic", float(stoch_signal_val), _get_component_weight("Stochastic"), 1.0))
+
+    # 籌碼面（若有資料才納入；保留融資 -2 強反轉）
+    if fundamental_data:
+        if 'margin_balance' in fundamental_data and len(fundamental_data['margin_balance']) >= 7:
+            score_components.append(("MarginBalance", float(margin_signal), _get_component_weight("MarginBalance"), 2.0))
+        if 'foreign_investor_net' in fundamental_data and len(fundamental_data['foreign_investor_net']) >= 7:
+            score_components.append(("ForeignInvestor", float(foreign_signal), _get_component_weight("ForeignInvestor"), 1.0))
+
+    contributions = [signal * weight for _name, signal, weight, _max_abs in score_components]
+    total_score = float(sum(contributions))
+    buy_signals = float(sum(v for v in contributions if v > 0))
+    sell_signals = float(sum(abs(v) for v in contributions if v < 0))
+    neutral_signals = float(sum(1 for _name, signal, _weight, _max_abs in score_components if signal == 0.0))
+
+    max_possible_score = float(sum(abs(weight) * max_abs for _name, _signal, weight, max_abs in score_components))
+    score_confidence_pct = (
+        min(abs(total_score) / max_possible_score, 1.0) * 100.0 if max_possible_score > 0 else 0.0
+    )
+    normalized_score = (total_score / max_possible_score) if max_possible_score > 0 else 0.0
+
     print(f"\n📈 訊號統計:")
     print(f"   • 買入訊號強度: {buy_signals:.1f}")
     print(f"   • 賣出訊號強度: {sell_signals:.1f}")
     print(f"   • 中性訊號: {neutral_signals}")
     print(f"   • 綜合評分: {total_score:.1f} ({'偏多' if total_score > 0 else '偏空' if total_score < 0 else '中性'})")
+    print(f"   • 加權信心分數: {score_confidence_pct:.0f}% (|score| / max_possible)")
+    print(f"   • 正規化分數: {normalized_score:+.2f} (介於 -1 ~ +1)")
 
-    # 專業投資建議
+    # === 專業投資建議 - 全走「加權打分制」 ===
     print(f"\n💡 專業投資建議:")
     current_price = recent_prices['close'].iloc[-1]
-    if total_score >= 2:
-        print("   🟢 強烈買入建議")
-        print(f"   💰 當前價格: {current_price:.2f}")
-        print("   📝 理由: 多數指標顯示上漲訊號，建議積極買入")
-    elif total_score >= 0.5:
-        print("   🟡 謹慎買入建議")
-        print(f"   💰 當前價格: {current_price:.2f}")
-        print("   📝 理由: 部分指標偏向上漲，可考慮逐步建倉")
-    elif total_score >= -0.5:
-        print("   🟠 觀望建議")
-        print(f"   💰 當前價格: {current_price:.2f}")
-        print("   📝 理由: 指標訊號混亂，建議觀望或減倉")
-    elif total_score >= -2:
-        print("   🔴 謹慎賣出建議")
-        print(f"   💰 當前價格: {current_price:.2f}")
-        print("   📝 理由: 部分指標顯示下跌訊號，建議逐步減倉")
-    else:
-        print("   🔴 強烈賣出建議")
-        print(f"   💰 當前價格: {current_price:.2f}")
-        print("   📝 理由: 多數指標顯示下跌訊號，建議積極賣出")
 
-    # 風險提醒
-    print(f"\n⚠️  風險提醒:")
+    # 門檻使用正規化分數（-1~+1）
+    strong_th = 0.45
+    medium_th = 0.25
+
+    if normalized_score >= strong_th and trend_strength_ok:
+        recommendation = "🟢 強烈買入"
+        position_size = "50%"
+        reason = "加權分數明顯偏多 + 趨勢強度良好"
+    elif normalized_score <= -strong_th and trend_strength_ok:
+        recommendation = "🔴 強烈賣出"
+        position_size = "清倉"
+        reason = "加權分數明顯偏空 + 趨勢強度良好"
+    elif normalized_score >= medium_th:
+        recommendation = "🟡 謹慎買入"
+        position_size = "20-30%"
+        reason = "加權分數偏多，但仍需確認延續性"
+    elif normalized_score <= -medium_th:
+        recommendation = "🟠 謹慎賣出"
+        position_size = "減倉 30-50%"
+        reason = "加權分數偏空，建議降低曝險"
+    else:
+        recommendation = "⚪ 觀望"
+        position_size = "暫時持有"
+        reason = "加權分數接近中性，等待更明確的優勢"
+
+    # 基本面紅旗：不改分數，但降級建議
+    if fundamental_warning and normalized_score >= medium_th:
+        recommendation = "🟡 謹慎買入（基本面警示）"
+        position_size = "10-20%"
+        reason = "技術面偏多但基本面惡化，降低部位並嚴控風險"
+
+    print(f"   {recommendation}")
+    print(f"   💰 當前價格: {current_price:.2f}")
+    print(f"   📊 部位規模: {position_size}")
+    print(f"   📝 理由: {reason}")
+
+    # 風險管理建議
+    print(f"\n🛡️ 風險管理建議:")
+    recent_high = recent_prices['high'].max()
+    recent_low = recent_prices['low'].min()
+    print(f"   • 近兩週最高價(參考停利): {recent_high:.2f}")
+    print(f"   • 近兩週最低價(參考停損): {recent_low:.2f}")
+
+    if 'atr' in recent_data.columns and len(recent_data) > 0:
+        latest_atr = recent_data['atr'].iloc[-1] if 'atr' in recent_data.columns else None
+        if latest_atr and latest_atr > 0:
+            suggested_stop = current_price - 2 * latest_atr
+            suggested_profit = current_price + 2 * latest_atr
+            rr_ratio = (suggested_profit - current_price) / (current_price - suggested_stop) if (current_price - suggested_stop) > 0 else 0
+            print(f"   • ATR型停損位: {suggested_stop:.2f} (當前價 - 2×ATR)")
+            print(f"   • ATR型停利位: {suggested_profit:.2f} (當前價 + 2×ATR)")
+            print(f"   • 風險/報酬比: 1:{rr_ratio:.2f}")
+
+    print(f"\n⚠️ 免責聲明:")
     print("   • 技術分析僅供參考，不保證未來表現")
-    print("   • 請結合基本面分析和風險承受能力做決定")
+    print("   • 歷史表現不代表未來成果")
+    print("   • 請結合基本面分析、籌碼面和風險承受能力做決定")
     print("   • 投資有風險，入市需謹慎")
     print("\n" + "="*80)
 
@@ -648,6 +1226,44 @@ def main() -> None:
         type=int,
         default=100,
         help="Number of days for synthetic data generation (default: 100). Ignored if data_path is used."
+    )
+
+    parser.add_argument(
+        "--analysis_days",
+        type=int,
+        default=14,
+        help="Number of most recent trading days to include in the text analysis (default: 14).",
+    )
+    parser.add_argument(
+        "--with_fundamentals",
+        action="store_true",
+        default=True,
+        help="Extract chip/fundamental fields from the preprocessed JSON and include them in analysis.",
+    )
+    parser.add_argument(
+        "--margin_balance_key",
+        type=str,
+        default="MarginPurchaseTodayBalance",
+        help="Column name for margin balance (default: MarginPurchaseTodayBalance).",
+    )
+
+    parser.add_argument(
+        "--score_weights_json",
+        type=str,
+        default=None,
+        help=(
+            "Optional: JSON string dict to override weighted scoring weights. "
+            "Example: '{\"SuperTrend\": 1.5, \"RSI\": 0.7}'."
+        ),
+    )
+    parser.add_argument(
+        "--score_weights_file",
+        type=str,
+        default=None,
+        help=(
+            "Optional: Path to a JSON file containing a dict of weight overrides for weighted scoring. "
+            "File content example: {\"MACD\": 1.8, \"OBV\": 0.4}."
+        ),
     )
     
     args = parser.parse_args()
@@ -762,6 +1378,12 @@ def main() -> None:
     macd_line, macd_signal, macd_histogram = compute_macd(sample_df, fast_period=12, slow_period=26, signal_period=9, col="close")
     obv_series = compute_obv(sample_df, volume_col="volume", close_col="close") if 'volume' in sample_df.columns else None
 
+    # ADX (trend strength)
+    try:
+        adx_series, _plus_di, _minus_di = compute_adx(sample_df, period=14)
+    except Exception:
+        adx_series = pd.Series(np.nan, index=sample_df.index, dtype=float)
+
     # Combine into a single DataFrame for easier viewing
     results_df: pd.DataFrame = pd.DataFrame({
         "close": sample_df["close"],
@@ -776,6 +1398,7 @@ def main() -> None:
         "macd": macd_line,
         "macd_signal": macd_signal,
         "macd_histogram": macd_histogram,
+        "adx": adx_series,
     })
     if obv_series is not None:
         results_df["obv"] = obv_series
@@ -1156,8 +1779,33 @@ def main() -> None:
         except Exception as e:
             print(f"\nError generating matplotlib plot: {e}")
 
-    # Generate trading analysis summary for the last 2 weeks
-    generate_trading_analysis(results_df, sample_df, args.period, args.multiplier)
+    # Extract chip/fundamental fields (optional) from the preprocessed DataFrame
+    fundamental_data: Optional[Dict[str, Any]] = None
+    if args.with_fundamentals:
+        try:
+            extracted = extract_fundamental_data_from_preprocessed_df(
+                sample_df,
+                margin_balance_key=str(args.margin_balance_key or "MarginPurchaseTodayBalance"),
+            )
+            fundamental_data = extracted if extracted else None
+        except Exception as e:
+            logging.warning("Failed to extract fundamentals from preprocessed data: %s", e)
+            fundamental_data = None
+
+    # Generate trading analysis summary for the recent window
+    score_weights_overrides = _load_score_weights_overrides(
+        score_weights_json=getattr(args, "score_weights_json", None),
+        score_weights_file=getattr(args, "score_weights_file", None),
+    )
+    generate_trading_analysis(
+        results_df,
+        sample_df,
+        args.period,
+        args.multiplier,
+        fundamental_data=fundamental_data,
+        analysis_days=int(args.analysis_days),
+        score_weights=score_weights_overrides,
+    )
 
 if __name__ == "__main__":
     main()

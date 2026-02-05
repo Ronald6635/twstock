@@ -593,6 +593,82 @@ def run_batch_fetch(stock_id: str, config: dict, temp_dir: Path) -> bool:
         logging.error(f"Error running batch fetch for {stock_id}: {e}")
         return False
 
+def _check_preprocessed_date_range(json_path: Path, config_start: str, config_end: str) -> bool:
+    """Check if preprocessed JSON file covers the date range in config.
+    
+    Inspects the 'date' column in the preprocessed file and verifies that
+    it includes [config_start, config_end]. Returns True if coverage is
+    sufficient, False otherwise or if unable to determine.
+    
+    Args:
+        json_path: Path to preprocessed JSON file.
+        config_start: Start date from config (YYYY-MM-DD).
+        config_end: End date from config (YYYY-MM-DD).
+    
+    Returns:
+        True if file's date range covers the config range, False otherwise.
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Extract records list
+        if isinstance(data, dict) and 'data' in data:
+            records = data['data']
+        else:
+            records = data if isinstance(data, list) else []
+        
+        if not records or len(records) == 0:
+            logging.debug(f"Preprocessed file has no records: {json_path}")
+            return False
+        
+        # Find date column (try common names)
+        first_record = records[0]
+        if not isinstance(first_record, dict):
+            logging.debug(f"First record is not a dict: {type(first_record)}")
+            return False
+        
+        date_col = None
+        for key in ['date', 'Date', 'DATE']:
+            if key in first_record:
+                date_col = key
+                break
+        
+        if not date_col:
+            logging.debug(f"No 'date' column found in preprocessed file. Available keys: {list(first_record.keys())[:5]}")
+            return False
+        
+        # Extract and sort dates
+        dates = [rec.get(date_col) for rec in records if isinstance(rec, dict) and date_col in rec]
+        if not dates:
+            logging.debug(f"No date values extracted from '{date_col}' column")
+            return False
+        
+        # Convert to strings and sort
+        dates_str = [str(d) for d in dates]
+        dates_sorted = sorted(dates_str)
+        file_start = dates_sorted[0]
+        file_end = dates_sorted[-1]
+        
+        # String comparison works for YYYY-MM-DD format
+        config_start_str = str(config_start)
+        config_end_str = str(config_end)
+        covers = file_start <= config_start_str and file_end >= config_end_str
+        
+        if not covers:
+            logging.info(
+                f"Preprocessed file date range [{file_start}, {file_end}] "
+                f"does not fully cover config range [{config_start_str}, {config_end_str}]"
+            )
+        else:
+            logging.info(f"Preprocessed file date range [{file_start}, {file_end}] covers config range")
+        
+        return covers
+    except Exception as e:
+        logging.warning(f"Unable to check preprocessed file date range: {e}")
+        return False
+
+
 def run_preprocessing(stock_id, config, data_dir, temp_dir):
     """Run preprocessing.py for a specific stock."""
     try:
@@ -603,28 +679,36 @@ def run_preprocessing(stock_id, config, data_dir, temp_dir):
         output_json = os.path.join(data_dir, f"preprocessed_{stock_id}.json")
         output_csv = os.path.join(data_dir, f"preprocessed_{stock_id}.csv")
         
-        # Priority 1: Use existing preprocessed file from datasets
+        # Priority 1: Use existing preprocessed file from datasets (with date range check)
         if existing_preprocessed.exists():
-            logging.info(f"Using existing preprocessed file: {existing_preprocessed}")
-            # Copy to robot data dir
-            import shutil
-            shutil.copy2(existing_preprocessed, output_json)
-            # Also copy CSV if exists
-            existing_csv = datasets_dir / f"preprocessed_{company}-{stock_id}.csv"
-            if existing_csv.exists():
-                shutil.copy2(existing_csv, output_csv)
-            else:
-                # Create CSV from JSON
-                with open(output_json, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                import pandas as pd
-                if 'data' in data:
-                    df = pd.DataFrame(data['data'])
+            # Check if file's date range covers config requirements
+            config_start = config.get('start_date', '2020-01-01')
+            config_end = config.get('end_date', datetime.now().strftime('%Y-%m-%d'))
+            
+            if _check_preprocessed_date_range(existing_preprocessed, config_start, config_end):
+                logging.info(f"Using existing preprocessed file: {existing_preprocessed}")
+                # Copy to robot data dir
+                import shutil
+                shutil.copy2(existing_preprocessed, output_json)
+                # Also copy CSV if exists
+                existing_csv = datasets_dir / f"preprocessed_{company}-{stock_id}.csv"
+                if existing_csv.exists():
+                    shutil.copy2(existing_csv, output_csv)
                 else:
-                    df = pd.DataFrame(data)
-                df.to_csv(output_csv, index=False)
-            logging.info(f"Preprocessed data copied for {stock_id}")
-            return True
+                    # Create CSV from JSON
+                    with open(output_json, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    import pandas as pd
+                    if 'data' in data:
+                        df = pd.DataFrame(data['data'])
+                    else:
+                        df = pd.DataFrame(data)
+                    df.to_csv(output_csv, index=False)
+                logging.info(f"Preprocessed data copied for {stock_id}")
+                return True
+            else:
+                # Date range insufficient, proceed to regenerate
+                logging.info(f"Preprocessed file exists but date range insufficient, will regenerate from combined/fetch")
         
         # Priority 2: Use combined files from datasets or cache
         combined_dirs = [
@@ -755,11 +839,39 @@ def run_indicators(stock_id, config, data_dir, reports_dir):
         if not os.path.exists(preprocessed_file):
             logging.error(f"Preprocessed file not found: {preprocessed_file}")
             return False
+
+        indicator_params = config.get('indicator_params', {}) if isinstance(config, dict) else {}
+        period = int(indicator_params.get('supertrend_period', 14))
+        multiplier = float(indicator_params.get('supertrend_multiplier', 2.5))
+        analysis_days = int(config.get('analysis_days', 14))
+        use_fundamentals = bool(indicator_params.get('use_fundamentals', False))
+        margin_balance_key = str(indicator_params.get('margin_balance_key', 'MarginPurchaseTodayBalance'))
+        score_weights = indicator_params.get('score_weights', None)
+
         cmd = [
             sys.executable, 'engine/datasets/indicators.py',
             preprocessed_file,
             '--start_date', config['start_date']
         ]
+
+        # Ensure the indicators script uses the robot's configured parameters
+        cmd.extend(['--period', str(period)])
+        cmd.extend(['--multiplier', str(multiplier)])
+        cmd.extend(['--analysis_days', str(analysis_days)])
+
+        # Enable chip/fundamental integration (dict.md: MarginPurchaseTodayBalance)
+        if use_fundamentals:
+            cmd.append('--with_fundamentals')
+            cmd.extend(['--margin_balance_key', margin_balance_key])
+
+        # Optional: override weighted scoring weights from config
+        if isinstance(score_weights, dict) and score_weights:
+            try:
+                weights_json = json.dumps(score_weights, ensure_ascii=False)
+                cmd.extend(['--score_weights_json', weights_json])
+            except Exception as e:
+                logging.warning(f"Unable to serialize score_weights for {stock_id}: {e}")
+
         # Redirect output to report file
         report_file = os.path.join(reports_dir, f"analysis_{stock_id}.txt")
         env = os.environ.copy()
