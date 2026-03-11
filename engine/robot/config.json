@@ -1,7 +1,7 @@
 {
     "api_key": "FINMIND_API_KEY",
     "start_date": "2020-01-01",
-    "end_date": "2026-02-06",
+    "end_date": "2026-03-10",
     "stocks": "all",
     "run_frequency": "daily",
     "output_dirs": {
@@ -45,7 +45,7 @@
 
     "api_throttle_enabled": true,
     "api_throttle_min_seconds": 2.0,
-    "api_throttle_max_seconds": 20.0,
+    "api_throttle_max_seconds": 25.0,
     "api_throttle_mode": "linear",
 
     "interactive_plots": false

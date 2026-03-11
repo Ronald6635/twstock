@@ -679,12 +679,12 @@ def run_preprocessing(stock_id, config, data_dir, temp_dir):
         output_json = os.path.join(data_dir, f"preprocessed_{stock_id}.json")
         output_csv = os.path.join(data_dir, f"preprocessed_{stock_id}.csv")
         
+        # Check if file's date range covers config requirements
+        config_start = config.get('start_date', '2020-01-01')
+        config_end = config.get('end_date', datetime.now().strftime('%Y-%m-%d'))
+
         # Priority 1: Use existing preprocessed file from datasets (with date range check)
         if existing_preprocessed.exists():
-            # Check if file's date range covers config requirements
-            config_start = config.get('start_date', '2020-01-01')
-            config_end = config.get('end_date', datetime.now().strftime('%Y-%m-%d'))
-            
             if _check_preprocessed_date_range(existing_preprocessed, config_start, config_end):
                 logging.info(f"Using existing preprocessed file: {existing_preprocessed}")
                 # Copy to robot data dir
@@ -712,19 +712,34 @@ def run_preprocessing(stock_id, config, data_dir, temp_dir):
         
         # Priority 2: Use combined files from datasets or cache
         combined_dirs = [
-            datasets_dir,  # engine/datasets/
-            Path(__file__).parent.parent.parent / "cache" / f"{company}-{stock_id}"  # cache/
+            datasets_dir, 
+            Path(__file__).parent.parent.parent / "cache" / f"{company}-{stock_id}"
         ]
+        
         combined_file = None
+        valid_combined_files = []
+        
+        import re
+        # 檔名格式: combined_{start_date}_{end_date}_{timestamp}.json
+        filename_pattern = re.compile(r"combined_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})_")
+
         for combined_dir in combined_dirs:
             if combined_dir.exists():
                 combined_pattern = str(combined_dir / "combined_*.json")
-                combined_files = glob.glob(combined_pattern)
-                if combined_files:
-                    combined_file = combined_files[0]
-                    break
+                for f_path in glob.glob(combined_pattern):
+                    # 透過正則表達式從檔名解析日期
+                    match = filename_pattern.search(os.path.basename(f_path))
+                    if match:
+                        file_start, file_end = match.groups()
+                        # 確認檔案的資料區間大於或等於 config 要求的區間
+                        if file_start <= config_start and file_end >= config_end:
+                            valid_combined_files.append(f_path)
+
+        if valid_combined_files:
+            # 符合條件的檔案中，取字母排序最晚（最新 timestamp）的一個
+            combined_file = sorted(valid_combined_files)[-1]
         
-        # If we found a combined file, try to preprocess it
+        # If we found a VALID combined file, try to preprocess it
         if combined_file:
             cmd = [
                 sys.executable, 'engine/datasets/preprocessing.py',
