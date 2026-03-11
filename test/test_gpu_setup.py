@@ -46,16 +46,24 @@ def verify_gpu_status() -> Dict[str, Union[str, bool, float]]:
     """
     status: Dict[str, Any] = {
         "backend": keras.config.backend(),
-        "is_cuda_active": torch.cuda.is_available(),
+        "is_cuda_active": False,
         "device_name": "CPU",
-        "total_memory_gb": 0.0
+        "total_memory_gb": 0.0,
+        "cuda_version": None,
+        "error": None,
     }
 
-    if status["is_cuda_active"]:
-        status["device_name"] = torch.cuda.get_device_name(0)
-        # Convert bytes to Gigabytes for readability
-        # Formula: GB = total_bytes / 1024^3
-        status["total_memory_gb"] = torch.cuda.get_device_properties(0).total_memory / 1e9
+    try:
+        status["is_cuda_active"] = torch.cuda.is_available()
+        if status["is_cuda_active"]:
+            status["device_name"] = torch.cuda.get_device_name(0)
+            status["cuda_version"] = torch.version.cuda or "unknown"
+            # Convert bytes -> GiB using 1024**3 for accuracy
+            status["total_memory_gb"] = (
+                torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            )
+    except Exception as exc:  # pragma: no cover - diagnostic helper
+        status["error"] = str(exc)
 
     return status
 
@@ -82,35 +90,59 @@ def execute_gpu_test(results: Dict[str, Any]) -> None:
     """
     print(f"Keras Backend: {results['backend']}")
     print(f"PyTorch CUDA Available: {results['is_cuda_active']}")
-    
-    if results["is_cuda_active"]:
-        print(f"GPU Device: {results['device_name']}")
-        # Display memory in GB using KaTeX for the underlying logic:
-        # $$ GB = \frac{bytes}{1024^3} $$
-        print(f"GPU Memory: {results['total_memory_gb']:.2f} GB")
+
+    if results.get("is_cuda_active"):
+        print(f"GPU Device: {results.get('device_name')}")
+        print(f"CUDA Runtime: {results.get('cuda_version')}")
+        print(f"GPU Memory: {results.get('total_memory_gb'):.2f} GiB")
     else:
-        # NOTE: If this prints False, verify the PyTorch installation index-url
-        # CRITICAL: Without CUDA, training performance will degrade by ~10-50x.
         print("WARNING: CUDA is not detected. Training will be slow on CPU.")
 
-    # Quick functional model test
-    # Standard: Use torch tensors when backend is set to 'torch'
-    X_test: torch.Tensor = torch.randn(10, 5)
-    
-    # Define a simple regression model to test layer connectivity
+    # Extra system diagnostic (best-effort)
+    try:  # pragma: no cover - informational
+        import subprocess
+
+        completed = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+        if completed.returncode == 0:
+            print("\n--- nvidia-smi output (snippet) ---")
+            print("\n".join(completed.stdout.splitlines()[:15]))
+            print("--- end snippet ---\n")
+    except Exception:
+        pass
+
+    # Determine device and create tensors on it explicitly
+    device = torch.device("cuda:0" if results.get("is_cuda_active") else "cpu")
+    X_test: torch.Tensor = torch.randn(10, 5, device=device)
+
+    # Pure PyTorch functional check (most reliable indicator of GPU use)
+    torch_model = torch.nn.Sequential(
+        torch.nn.Linear(5, 64),
+        torch.nn.ReLU(),
+        torch.nn.Linear(64, 1),
+    ).to(device)
+
+    with torch.no_grad():
+        torch_out = torch_model(X_test)
+
+    print(f"PyTorch model output device: {torch_out.device}, shape: {torch_out.shape}")
+
+    # Keras test: try using the same input (may require CPU numpy fallback)
     model: keras.Sequential = keras.Sequential([
         keras.layers.Input(shape=(5,)),
         keras.layers.Dense(64, activation='relu'),
-        keras.layers.Dense(1)
+        keras.layers.Dense(1),
     ])
-    
-    # CRITICAL: Compilation must succeed before execution to initialize weights
     model.compile(optimizer='adam', loss='mse')
-    
-    # Forward pass: Keras 3 handles the conversion to the backend's native tensor
-    prediction: torch.Tensor | Any = model(X_test)
-    
-    print(f"\nModel Test Output Shape: {prediction.shape}")
+
+    try:
+        # Attempt to pass the torch tensor (backend='torch' may accept it)
+        prediction = model(X_test)
+        print(f"\nKeras Model Test Output Shape: {prediction.shape}")
+    except Exception:
+        # Fallback: pass CPU numpy array to Keras
+        prediction = model(X_test.cpu().numpy())
+        print(f"\nKeras Model (CPU fallback) Output Shape: {prediction.shape}")
+
     print("✓ Diagnostic complete!")
 
 # =============================================================================
