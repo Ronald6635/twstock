@@ -17,6 +17,13 @@ This folder contains utility scripts for processing, analyzing, and machine lear
 - `train_trees.py`: Time-series optimized tree-based models (Random Forest, Gradient Boosting, LightGBM)
 - `dl_model.py`: Deep learning models (LSTM, Dense networks) using Keras 3 with PyTorch backend
 
+### Strategy Screening & Backtesting
+- `backtest_v4.1.py`: 回測 V4.1 篩選策略，含 SuperTrend / MA / FinMind API 資料抓取
+- `screener_v3.py`: V3.0 篩選流程，從 `fundamental_pass.csv` 得到候選清單並做技術面檢查
+- `screener_v4.1.py`: V4.1 進階篩選流程，新增籌碼（外資/融資）過濾與多重技術指標
+- `fundamental_pass.csv`: V3/V4 策略的基本面篩選輸入範例資料
+- `goodinfo.tw.md`: Goodinfo 基本面篩選操作說明與 CSV 來源範例
+
 ## Installation
 
 Install required dependencies for machine learning features:
