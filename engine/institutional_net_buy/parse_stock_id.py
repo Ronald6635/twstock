@@ -12,7 +12,7 @@ def main():
     output_path = Path(args.output_txt)
 
     if not input_path.exists():
-        print(f"❌ 錯誤：找不到輸入檔案 '{input_path}'")
+        print(f"錯誤：找不到輸入檔案 '{input_path}'")
         return
 
     print(f"讀取檔案: {input_path} ...")
@@ -20,7 +20,7 @@ def main():
     df = pd.read_csv(input_path, dtype={"stock_id": str})
 
     if "stock_id" not in df.columns:
-        print("❌ 錯誤：CSV 中找不到 'stock_id' 欄位")
+        print("錯誤：CSV 中找不到 'stock_id' 欄位")
         return
 
     # 取得所有的 stock_id
@@ -31,7 +31,7 @@ def main():
         for sid in stock_ids:
             f.write(f"{sid}\n")
 
-    print(f"✅ 成功提取並寫入 {len(stock_ids)} 筆 stock_id 至 {output_path}")
+    print(f"成功提取並寫入 {len(stock_ids)} 筆 stock_id 至 {output_path}")
 
 if __name__ == "__main__":
     main()

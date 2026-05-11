@@ -42,7 +42,7 @@ python institutional_net_buy_fetcher.py `
 python institutional_net_buy_fetcher.py `
     --stock-source all `
     --days 90 `
-    --end-date 2026-05-09 `
+    --end-date 2026-05-11 `
     --api-throttle-enabled `
     --export-tfrecord
 
@@ -65,6 +65,7 @@ institutional_net_buy_<start>_<end>.tfrecord   # only with --export-tfrecord
 
 This folder contains several helper scripts for institutional flow monitoring and analysis:
 
+- `run_all_analysis.py`: Runs the full automated workflow including fetching, trend monitoring, target extraction, and visualization.
 - `institutional_net_buy_fetcher.py`: Fetches institutional flow and close price data from FinMind for the selected stocks, then exports CSV and optionally TFRecord.
 - `institutional_net_buy_scanner.py`: Uses `targets.txt` as a stock list and fetches the latest institutional buy/sell data directly into a CSV file.
 - `institutional_net_buy_ml.py`: Trains a 1D CNN + GRU model using TFRecord data to predict close prices from institutional features.
@@ -75,7 +76,12 @@ This folder contains several helper scripts for institutional flow monitoring an
 
 ### Example Flows
 
-1.  Fetch data for a specific stock list and create TFRecord:
+1.  Run the full automated analysis workflow:
+    ```powershell
+    python run_all_analysis.py
+    ```
+
+2.  Fetch data for a specific stock list and create TFRecord:
     ```powershell
     python institutional_net_buy_fetcher.py `
         --stock-source list `
@@ -84,7 +90,7 @@ This folder contains several helper scripts for institutional flow monitoring an
         --export-tfrecord
     ```
 
-2.  Monitor institutional trend candidates without ML:
+3.  Monitor institutional trend candidates without ML:
     ```powershell
     python institutional_net_buy_trend_monitor.py `
         --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
@@ -92,16 +98,18 @@ This folder contains several helper scripts for institutional flow monitoring an
         --baseline-days 20
     ```
 
-3.  Extract target stock IDs from the trend monitor output CSV:
+4.  Extract target stock IDs from the trend monitor output CSV:
     ```powershell
     python parse_stock_id.py `
         --input-csv trend_candidates_2026-02-09_2026-05-08.csv `
         --output-txt targets.txt
     ```
 
-4.  Visualize only the stock IDs from `targets.txt`:
+5.  Visualize only the stock IDs from `targets.txt`:
     ```powershell
-    python institutional_net_buy_visualizer.py
+    python institutional_net_buy_visualizer.py `
+        --csv-filename institutional_net_buy_2026-02-10_2026-05-11.csv `
+        --targets-filename targets.txt
     ```
 
 5.  Train a model from TFRecord data:

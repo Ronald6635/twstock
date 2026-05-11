@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 from matplotlib.font_manager import FontProperties
+import argparse # Added argparse
 
 # ==========================================
 # 1. 設定與字體處理 (解決中文亂碼問題)
@@ -11,40 +12,36 @@ from matplotlib.font_manager import FontProperties
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'Arial Unicode MS', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
 
-# 指定要分析的 CSV 檔名（請確保檔案存在）
-# 你可以手動修改這裡的日期來讀取不同的檔案
-csv_filename = "institutional_net_buy_2026-02-08_2026-05-09.csv"
-# csv_filename = "institutional_net_buy_2026-02-07_2026-05-08.csv"
-targets_filename = "targets.txt"
+# Removed hardcoded csv_filename and targets_filename
 
 # ==========================================
 # 2. 資料讀取與處理邏輯
 # ==========================================
-def load_target_stock_ids(filename):
+def load_target_stock_ids(filename: str) -> set[str]: # Added type hint
     if not os.path.exists(filename):
-        print(f"⚠️ 找不到股票清單檔案 '{filename}'，將停止繪圖。")
+        print(f"[WARNING] 找不到股票清單檔案 '{filename}'，將停止繪圖。")
         return set()
 
     with open(filename, "r", encoding="utf-8") as file:
         target_ids = {line.strip() for line in file if line.strip()}
 
     if not target_ids:
-        print(f"⚠️ 股票清單檔案 '{filename}' 為空，將停止繪圖。")
+        print(f"[WARNING] 股票清單檔案 '{filename}' 為空，將停止繪圖。")
 
     return target_ids
 
 
-def analyze_institutional_trends(filename):
-    if not os.path.exists(filename):
-        print(f"⚠️ 錯誤：找不到檔案 '{filename}'，請確認檔案名稱與路徑。")
+def analyze_institutional_trends(csv_filename: str, targets_filename: str): # Modified signature
+    if not os.path.exists(csv_filename): # Use csv_filename
+        print(f"[WARNING] 錯誤：找不到檔案 '{csv_filename}'，請確認檔案名稱與路徑。")
         return
 
-    target_stock_ids = load_target_stock_ids(targets_filename)
+    target_stock_ids = load_target_stock_ids(targets_filename) # Pass targets_filename
     if not target_stock_ids:
         return
 
     # 讀取 CSV
-    df = pd.read_csv(filename)
+    df = pd.read_csv(csv_filename) # Use csv_filename
     
     # 轉換日期格式並排序
     df['date'] = pd.to_datetime(df['date'])
@@ -53,20 +50,20 @@ def analyze_institutional_trends(filename):
     # 選擇法人名稱欄位，兼容舊版輸出
     investor_column = 'name' if 'name' in df.columns else 'investor_name' if 'investor_name' in df.columns else None
     if investor_column is None:
-        print("⚠️ 找不到法人名稱欄位，請確認 CSV 包含 'name' 或 'investor_name'。")
+        print("[WARNING] 找不到法人名稱欄位，請確認 CSV 包含 'name' 或 'investor_name'。")
         return
 
     # 計算累積買賣超 (按股票與法人名稱分組後累加)
     df['cum_net_buy'] = df.groupby(['stock_id', investor_column])['net_buy'].transform('cumsum')
 
     if 'close' not in df.columns:
-        print("⚠️ 找不到股價欄位 'close'，請確認 CSV 包含 close 欄位。")
+        print("[WARNING] 找不到股價欄位 'close'，請確認 CSV 包含 close 欄位。")
         return
 
     df['stock_id'] = df['stock_id'].astype(str)
     filtered_df = df[df['stock_id'].isin(target_stock_ids)].copy()
     if filtered_df.empty:
-        print("⚠️ CSV 中找不到 targets.txt 指定的股票代碼，未產生任何圖表。")
+        print("[WARNING] CSV 中找不到 targets.txt 指定的股票代碼，未產生任何圖表。")
         return
 
     # 取得清單中所有的股票代碼
@@ -167,11 +164,16 @@ def analyze_institutional_trends(filename):
         output_image = f"trend_{stock_id}{name_suffix}_{end_date_str}.png"
         plt.savefig(output_image)
         plt.close()
-        print(f"✅ 已產生圖表：{output_image}")
+        print(f"已產生圖表：{output_image}")
 
 # ==========================================
 # 3. 執行分析
 # ==========================================
 if __name__ == "__main__":
-    analyze_institutional_trends(csv_filename)
+    parser = argparse.ArgumentParser(description="繪製法人累積買賣超與股價/動態成本趨勢圖")
+    parser.add_argument("--csv-filename", type=str, required=True, help="輸入的 CSV 檔案路徑 (fetcher 輸出)")
+    parser.add_argument("--targets-filename", type=str, default="targets.txt", help="目標股票 ID 檔案路徑")
+    args = parser.parse_args()
+    
+    analyze_institutional_trends(args.csv_filename, args.targets_filename) # Pass arguments
     print("\n所有分析圖表已完成，請查看資料夾中的 .png 檔案。")
