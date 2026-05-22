@@ -68,8 +68,11 @@ This folder contains several helper scripts for institutional flow monitoring an
 - `run_all_analysis.py`: Runs the full automated workflow including fetching, trend monitoring, target extraction, and visualization.
 - `institutional_net_buy_fetcher.py`: Fetches institutional flow and close price data from FinMind for the selected stocks, then exports CSV and optionally TFRecord.
 - `institutional_net_buy_scanner.py`: Uses `targets.txt` as a stock list and fetches the latest institutional buy/sell data directly into a CSV file.
-- `institutional_net_buy_ml.py`: Trains a 1D CNN + GRU model using TFRecord data to predict close prices from institutional features.
+- `institutional_net_buy_ml.py`: Trains a dilated 1D CNN model using TFRecord data for 5-day ahead multi-step close price prediction, with per-stock chronological train/validation split and train-only min-max scaling to reduce leakage risk. `--window-size 1` builds current-day feature inputs and labels the next 5 closing prices.
+- `institutional_net_buy_ml_lstm_attention.py`: Trains an Attention + LSTM model with the same 12 engineered features, using per-stock chronological train/validation split and train-only min-max scaling for leakage-safe evaluation.
 - `institutional_net_buy_predict.py`: Loads a trained `.keras` model and runs predictions on TFRecord data.
+- `institutional_net_buy_predict_visual.py`: Generates comparison plots (PNG) of predicted vs. actual prices for stocks listed in `targets.txt`, with stock ID normalization (`strip`, `.0` cleanup) across TFRecord/targets/stats and an execution summary (`成功輸出圖檔`, `skip *`) for easier debugging.
+- `institutional_net_buy_predict_visual_all.py`: Runs the trained model across all stocks found in the TFRecord file and creates visualizations for the top-ranked predictions. It still reads `targets.txt` to mark tracked stocks, but does not limit prediction to that list.
 - `institutional_net_buy_trend_monitor.py`: Non-ML analyzer that searches for stocks with increasing or sustained-high institutional net-buy trends and prints recommendations.
 - `parse_stock_id.py`: Utility script to extract `stock_id` from CSV files (such as trend monitor outputs) and save them as a plain text list (e.g., `targets.txt`) while preserving formatting like leading zeros.
 - `institutional_net_buy_visualizer.py`: Plots cumulative institutional net-buy and close price for stock IDs listed in `targets.txt`.
@@ -112,22 +115,82 @@ This folder contains several helper scripts for institutional flow monitoring an
         --targets-filename targets.txt
     ```
 
-5.  Train a model from TFRecord data:
+6.  Train a model from TFRecord data using the leakage-fixed dilated CNN pipeline:
     ```powershell
     python institutional_net_buy_ml.py `
-        --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
         --epochs 50 `
         --batch-size 64 `
-        --window-size 10
+        --window-size 5 `
+        --val-ratio 0.2
     ```
 
-6.  Predict using a trained model:
+    Use `--window-size 1` to train the 5-day multi-step forecast model, where a single day of institutional features predicts the next 5 close prices. Larger window sizes will create a multi-day input sequence instead.
+    
+    **Label Normalization**: Both input features and target labels (close prices) are normalized per stock using train-only Min-Max scaling. This script writes `*_leakage_fixed.stats.json` with `target_min` and `target_max`, which are required for denormalizing predictions.
+
+7.  Train using Attention + LSTM with a temporal split and train-only scaling:
+    ```powershell
+    python institutional_net_buy_ml_lstm_attention.py `
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --epochs 50 `
+        --batch-size 64 `
+        --window-size 5 `
+        --val-ratio 0.2
+    ```
+
+    This script uses per-stock chronological validation and denormalized validation metrics for more realistic time-series evaluation.
+
+8.  Predict using a trained model:
     ```powershell
     python institutional_net_buy_predict.py `
         --model-path institutional_net_buy_model.keras `
-        --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
-        --window-size 10
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --window-size 5 `
+        --limit 100
     ```
+9.  Visualize model predictions for target stocks:
+    for the dilated CNN:
+    ```powershell
+    python institutional_net_buy_predict_visual.py `
+        --model-path institutional_net_buy_v2_dilated.keras `
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --stats-path institutional_net_buy_2026-02-20_2026-05-21.leakage_fixed.stats.json `
+        --window-size 5
+    ```
+    for LSTM+Attention:
+    ```powershell
+    python institutional_net_buy_predict_visual.py `
+        --model-path institutional_net_buy_v3_lstm_attention.keras `
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --stats-path institutional_net_buy_2026-02-20_2026-05-21_lstmattn.stats.json `
+        --window-size 5
+    ```
+    for all-stock visualization:
+    ```powershell
+    python institutional_net_buy_predict_visual_all.py `
+        --model-path institutional_net_buy_v3_lstm_attention.keras `
+        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --stats-path institutional_net_buy_2026-02-20_2026-05-21.leakage_fixed.stats.json `
+        --window-size 5
+    ```
+
+    Plots are saved to the `predict_plot/` folder as `{stock_id}_{name}.png`.
+    The script automatically denormalizes model predictions using `target_min` and `target_max` from the provided stats file (`--stats-path`), ensuring accurate visualization of predicted vs. actual prices in their original value ranges.
+    The script prints a run summary including `成功輸出圖檔` and `skip` counters (`not_in_targets`, `not_in_stats`, `too_short`, `no_window`) for quick root-cause checks when output is empty.
+
+## Testing
+
+The generated validation scripts for the institutional ML workflow are placed under the repository `test/` directory.
+Run them from the project root:
+
+```powershell
+python test/test_model_build.py
+python test/test_dataset_pipeline.py
+python test/test_integration.py
+```
+
+These scripts verify the updated model architecture, TFRecord multi-step label pipeline, and end-to-end training flow.
 
 ## CLI Reference
 

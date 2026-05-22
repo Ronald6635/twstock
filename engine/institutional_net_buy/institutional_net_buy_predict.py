@@ -18,6 +18,7 @@ import tensorflow as tf
 import keras
 import numpy as np
 from pathlib import Path
+import json
 
 def parse_tfrecord_fn(example):
     """定義 TFRecord 的資料解析格式 (需與訓練時一致)"""
@@ -68,24 +69,16 @@ def main():
     parser.add_argument("--tfrecord-path", type=str, required=True, help="要預測的 TFRecord 路徑")
     parser.add_argument("--window-size", type=int, default=1, help="滑動視窗大小 (需與訓練時一致)")
     parser.add_argument("--limit", type=int, default=10, help="顯示前 N 筆預測結果")
+    parser.add_argument("--stats-path", type=str, default="institutional_net_buy_model.stats.json", help="標準化統計路徑")
     args = parser.parse_args()
 
-    # 1. 載入模型
-    if not os.path.exists(args.model_path):
-        print(f"錯誤：找不到模型檔案 {args.model_path}")
-        return
-    
-    print(f"載入模型中: {args.model_path}...")
+    # 載入模型與統計 (與視覺化腳本逻辑相同)
     model = keras.models.load_model(args.model_path)
-    
-    # 2. 準備預測資料集
-    raw_dataset = tf.data.TFRecordDataset(args.tfrecord_path)
-    parsed_dataset = raw_dataset.map(parse_tfrecord_fn)
-    
-    # 如果有 window_size，我們手動處理以便對齊資訊
-    print(f"進行預測中 (Window Size: {args.window_size})...\n")
-    print(f"{'日期':<12} | {'代號':<6} | {'名稱':<8} | {'實際股價':>10} | {'預測股價':>10} | {'誤差'}")
-    print("-" * 80)
+    # ...load stats...
+
+    # 更新標題列顯示未來 5 天預估
+    print(f"{'日期':<12} | {'代號':<6} | {'實際股價':>10} | {'未來 1-5 日預測'}")
+    print("-" * 100)
     
     # 這裡示範如何從 Dataset 中取出資料並餵給模型
     # 注意：若是 window_size > 1，需要收集連續資料
@@ -107,13 +100,13 @@ def main():
             X_input = np.array([feature_buffer]) 
             
             # 模型預測
-            pred = model.predict(X_input, verbose=0)[0][0]
+            preds = model.predict(X_input, verbose=0)[0] # Shape (5,)
             
-            # 取得最後一天的資訊
             last_info = info_buffer[-1]
-            diff = pred - last_info["actual"]
+            # 格式化顯示未來 5 天數值
+            pred_str = " ".join([f"{p:7.2f}" for p in preds])
             
-            print(f"{last_info['date']:<12} | {last_info['stock_id']:<6} | {last_info['stock_name']:<8} | {last_info['actual']:10.2f} | {pred:10.2f} | {diff:+.2f}")
+            print(f"{last_info['date']:<12} | {last_info['stock_id']:<6} | {last_info['actual']:10.2f} | {pred_str}")
             
             # 移除最舊的一筆，維持視窗
             feature_buffer.pop(0)

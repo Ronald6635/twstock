@@ -14,7 +14,8 @@ DEFAULT_TARGET_FILE: Path = SCRIPTS_DIR / "targets.txt"
 
 # Parameters for institutional_net_buy_fetcher.py
 # Set END_DATE to today's date for dynamic execution.
-END_DATE = datetime.date.today().strftime("%Y-%m-%d")
+# END_DATE = datetime.date.today().strftime("%Y-%m-%d")
+END_DATE = "2026-05-21" # Static end date for consistent testing
 DAYS_LOOKBACK = 90 # Number of calendar days to fetch data for
 STOCK_SOURCE = "all" # Choices: "all", "file", "list"
 STOCKS_LIST = "2330,2317" # Comma-separated stock IDs (only if STOCK_SOURCE is "list")
@@ -26,7 +27,7 @@ RECENT_DAYS = 10 # Recent lookback window for trend signal
 BASELINE_DAYS = 20 # Baseline window for high-level comparison
 MIN_HISTORY_DAYS = 30 # Minimum history length required per stock for analysis
 MIN_POSITIVE_RATIO = 0.6 # Minimum ratio of positive net-buy days in recent window
-TOP_K_CANDIDATES = 30 # Maximum number of top candidate stocks to output
+TOP_K_CANDIDATES = 50 # Maximum number of top candidate stocks to output
 
 # --- Derived Paths and Dates (DO NOT MODIFY MANUALLY) ---
 start_date_obj = datetime.datetime.strptime(END_DATE, "%Y-%m-%d") - datetime.timedelta(days=DAYS_LOOKBACK)

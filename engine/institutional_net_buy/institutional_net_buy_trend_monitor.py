@@ -26,6 +26,16 @@ FEATURE_COLUMNS = [
     "dealer_net_buy",
 ]
 
+DEFAULT_WEIGHTS = {
+    "foreign_net_buy": 1.0,
+    "foreign_dealer_net_buy": 1.0,
+    "trust_net_buy": 1.0,
+    # 自營商避險部位通常屬於短線、被動性買賣超，對波段趨勢的影響應適度降低。
+    "dealer_hedge_net_buy": 0.5,
+    # 自營商一般部位仍保留權重，但相較外資/投信可適度弱化。
+    "dealer_net_buy": 0.8,
+}
+
 
 def _safe_slope(values: pd.Series) -> float:
     """Calculate linear slope for a series; return 0.0 on short/invalid input."""
@@ -35,6 +45,16 @@ def _safe_slope(values: pd.Series) -> float:
     x_axis = np.arange(len(clean), dtype=float)
     slope, _ = np.polyfit(x_axis, clean.to_numpy(dtype=float), deg=1)
     return float(slope)
+
+
+def _compute_weighted_total_net_buy(dataframe: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
+    """Compute weighted institutional net buy, lowering hedge weight for trend stability."""
+    missing_columns = [col for col in weights if col not in dataframe.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns for weighted total net buy: {missing_columns}")
+
+    weighted_columns = [dataframe[col].astype(float) * weight for col, weight in weights.items()]
+    return sum(weighted_columns)
 
 
 def load_tfrecord_to_dataframe(tfrecord_path: Path) -> pd.DataFrame:
@@ -76,7 +96,7 @@ def load_tfrecord_to_dataframe(tfrecord_path: Path) -> pd.DataFrame:
     dataframe["stock_id"] = dataframe["stock_id"].astype(str)
     dataframe["date"] = pd.to_datetime(dataframe["date"], errors="coerce")
     dataframe = dataframe.dropna(subset=["date"])
-    dataframe["total_net_buy"] = dataframe[FEATURE_COLUMNS].sum(axis=1)
+    dataframe["total_net_buy"] = _compute_weighted_total_net_buy(dataframe, DEFAULT_WEIGHTS)
     dataframe = dataframe.sort_values(["stock_id", "date"]).reset_index(drop=True)
     return dataframe
 

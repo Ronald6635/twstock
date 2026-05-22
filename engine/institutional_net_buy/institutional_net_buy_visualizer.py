@@ -31,7 +31,7 @@ def load_target_stock_ids(filename: str) -> set[str]: # Added type hint
     return target_ids
 
 
-def analyze_institutional_trends(csv_filename: str, targets_filename: str): # Modified signature
+def analyze_institutional_trends(csv_filename: str, targets_filename: str) -> None:
     if not os.path.exists(csv_filename): # Use csv_filename
         print(f"[WARNING] 錯誤：找不到檔案 '{csv_filename}'，請確認檔案名稱與路徑。")
         return
@@ -40,12 +40,17 @@ def analyze_institutional_trends(csv_filename: str, targets_filename: str): # Mo
     if not target_stock_ids:
         return
 
-    # 讀取 CSV
-    df = pd.read_csv(csv_filename) # Use csv_filename
-    
+    # 讀取 CSV（明確指定 stock_id 型別，避免 mixed types 警告）
+    df = pd.read_csv(
+        csv_filename,
+        dtype={"stock_id": "string"},
+        low_memory=False,
+    )
+    df["stock_id"] = df["stock_id"].str.strip()
+
     # 轉換日期格式並排序
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values(by=['stock_id', 'date'])
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values(by=["stock_id", "date"])
 
     # 選擇法人名稱欄位，兼容舊版輸出
     investor_column = 'name' if 'name' in df.columns else 'investor_name' if 'investor_name' in df.columns else None
@@ -96,22 +101,20 @@ def analyze_institutional_trends(csv_filename: str, targets_filename: str): # Mo
             
             color = line[0].get_color()
             
-            # Calculate dynamic cost array
+            # Calculate pure buy dynamic cost array
             current_inventory = 0
             current_cost = 0
             costs = []
             for _, row in investor_df.iterrows():
-                net_buy = row['net_buy']
-                close = row['close']
-                if pd.notna(net_buy) and net_buy > 0:
-                    current_cost = (current_inventory * current_cost + net_buy * close) / (current_inventory + net_buy)
-                    current_inventory += net_buy
-                elif pd.notna(net_buy) and net_buy < 0:
-                    current_inventory += net_buy
-                    if current_inventory <= 0:
-                        current_inventory = 0
-                        current_cost = 0
-                # If net_buy == 0, maintain current state
+                buy_vol = row.get('buy', 0)
+                # Fallback to close if vwap does not exist or is missing
+                price = row['vwap'] if 'vwap' in row and pd.notna(row['vwap']) else row['close']
+                
+                if pd.notna(buy_vol) and buy_vol > 0:
+                    current_cost = (current_inventory * current_cost + buy_vol * price) / (current_inventory + buy_vol)
+                    current_inventory += buy_vol
+
+                # Ignore sells. Only keep tracking pure buy cost without decrementing inventory.
                 costs.append(current_cost if current_inventory > 0 else float('nan'))
                 
             ax2.plot(

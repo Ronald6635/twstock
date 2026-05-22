@@ -496,12 +496,17 @@ def get_smart_money_consensus(
                 api, stock_id, start_date, end_date, retry_max=config.api_retry_max
             )
             if not price_df.empty and "close" in price_df.columns:
-                price_df = price_df[["date", "close"]].copy()
+                cols = ["date", "close"]
+                if "Trading_Volume" in price_df.columns and "Trading_money" in price_df.columns:
+                    cols.extend(["Trading_Volume", "Trading_money"])
+                price_df = price_df[cols].copy()
                 price_df["date"] = price_df["date"].astype(str)
                 df["date"] = df["date"].astype(str)
                 df = df.merge(price_df, on="date", how="left")
             else:
                 df["close"] = float("nan")
+                df["Trading_Volume"] = 0.0
+                df["Trading_money"] = 0.0
 
             # Force stock_id to string before saving CSV
             df["stock_id"] = df["stock_id"].astype(str)
@@ -532,6 +537,18 @@ def get_smart_money_consensus(
         combined_df["close"] = float("nan")
     combined_df["close"] = pd.to_numeric(combined_df["close"], errors="coerce").fillna(0.0)
 
+    # Calculate VWAP
+    if "Trading_Volume" in combined_df.columns and "Trading_money" in combined_df.columns:
+        combined_df["Trading_Volume"] = pd.to_numeric(combined_df["Trading_Volume"], errors="coerce").fillna(0.0)
+        combined_df["Trading_money"] = pd.to_numeric(combined_df["Trading_money"], errors="coerce").fillna(0.0)
+        import numpy as np
+        # Calculate vwap, replace inf with nan, then fillna with close
+        vx = combined_df["Trading_money"] / combined_df["Trading_Volume"]
+        vx = vx.replace([np.inf, -np.inf], float("nan"))
+        combined_df["vwap"] = vx.fillna(combined_df["close"]).round(2)
+    else:
+        combined_df["vwap"] = combined_df["close"]
+
     combined_df["net_buy"] = combined_df["buy"] - combined_df["sell"]
     combined_df["buy"] = (combined_df["buy"] / 1000).astype(int)
     combined_df["sell"] = (combined_df["sell"] / 1000).astype(int)
@@ -552,6 +569,7 @@ def get_smart_money_consensus(
         "sell",
         "net_buy",
         "close",
+        "vwap",
     ]
     consensus_df = combined_df[result_columns].sort_values(
         by=["stock_id", "date", "net_buy"],
@@ -575,20 +593,28 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
 
     tfrecord_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 進行 Pivot，將原本同一天的 5 筆法人的 net_buy 展開變成獨立特徵欄位
+    if "vwap" not in df.columns:
+        df["vwap"] = df["close"]
+
+    # 進行 Pivot，將原本同一天的 5 筆法人的 net_buy 與 buy 展開變成獨立特徵欄位
     pivot_df = df.pivot_table(
-        index=["date", "stock_id", "stock_name", "close"],
+        index=["date", "stock_id", "stock_name", "close", "vwap"],
         columns="investor_name",
-        values="net_buy",
+        values=["net_buy", "buy"],
         aggfunc="sum",
         fill_value=0
     ).reset_index()
 
+    # Flatten MultiIndex columns
+    pivot_df.columns = [f"{col[1]}_{col[0]}" if col[1] else col[0] for col in pivot_df.columns]
+
     # 確保五大法人欄位皆存在
     expected_investors = ["外資", "外資自營商", "投信", "避險自營商", "自營商"]
     for inv in expected_investors:
-        if inv not in pivot_df.columns:
-            pivot_df[inv] = 0
+        if f"{inv}_net_buy" not in pivot_df.columns:
+            pivot_df[f"{inv}_net_buy"] = 0
+        if f"{inv}_buy" not in pivot_df.columns:
+            pivot_df[f"{inv}_buy"] = 0
 
     pivot_df = pivot_df.sort_values(by=["stock_id", "date"]).reset_index(drop=True)
 
@@ -612,24 +638,14 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
                 inv_state[inv] = {"inventory": 0.0, "total_cost": 0.0}
             prev_stock = curr_stock
         
-        close_price = pivot_df.at[i, "close"]
+        vwap_price = pivot_df.at[i, "vwap"]
         
         for inv_idx, inv in enumerate(expected_investors):
-            net_buy = pivot_df.at[i, inv]
+            buy_vol = pivot_df.at[i, f"{inv}_buy"]
             
-            if net_buy > 0:
-                inv_state[inv]["inventory"] += net_buy
-                inv_state[inv]["total_cost"] += net_buy * close_price
-            elif net_buy < 0:
-                # Sell: reduce inventory proportionally
-                if inv_state[inv]["inventory"] > 0:
-                    avg_c = inv_state[inv]["total_cost"] / inv_state[inv]["inventory"]
-                    inv_state[inv]["inventory"] += net_buy
-                    if inv_state[inv]["inventory"] <= 0:
-                        inv_state[inv]["inventory"] = 0.0
-                        inv_state[inv]["total_cost"] = 0.0
-                    else:
-                        inv_state[inv]["total_cost"] = inv_state[inv]["inventory"] * avg_c
+            if buy_vol > 0:
+                inv_state[inv]["inventory"] += buy_vol
+                inv_state[inv]["total_cost"] += buy_vol * vwap_price
             
             c_val = 0.0
             if inv_state[inv]["inventory"] > 0:
@@ -642,11 +658,11 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
     stock_names = pivot_df["stock_name"].to_numpy(dtype=str)
     closes = pivot_df["close"].to_numpy(dtype=float)
 
-    foreign_net = pivot_df["外資"].to_numpy(dtype=int)
-    foreign_dealer_net = pivot_df["外資自營商"].to_numpy(dtype=int)
-    trust_net = pivot_df["投信"].to_numpy(dtype=int)
-    dealer_hedge_net = pivot_df["避險自營商"].to_numpy(dtype=int)
-    dealer_net = pivot_df["自營商"].to_numpy(dtype=int)
+    foreign_net = pivot_df["外資_net_buy"].to_numpy(dtype=int)
+    foreign_dealer_net = pivot_df["外資自營商_net_buy"].to_numpy(dtype=int)
+    trust_net = pivot_df["投信_net_buy"].to_numpy(dtype=int)
+    dealer_hedge_net = pivot_df["避險自營商_net_buy"].to_numpy(dtype=int)
+    dealer_net = pivot_df["自營商_net_buy"].to_numpy(dtype=int)
 
     total = len(dates)
     logging.info("TFRecord 序列化開始 (Pivot後已展開特徵): %s 筆", total)
