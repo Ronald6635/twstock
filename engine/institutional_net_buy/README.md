@@ -68,11 +68,11 @@ This folder contains several helper scripts for institutional flow monitoring an
 - `run_all_analysis.py`: Runs the full automated workflow including fetching, trend monitoring, target extraction, and visualization.
 - `institutional_net_buy_fetcher.py`: Fetches institutional flow and close price data from FinMind for the selected stocks, then exports CSV and optionally TFRecord.
 - `institutional_net_buy_scanner.py`: Uses `targets.txt` as a stock list and fetches the latest institutional buy/sell data directly into a CSV file.
-- `institutional_net_buy_ml.py`: Trains a dilated 1D CNN model using TFRecord data for 5-day ahead multi-step close price prediction, with per-stock chronological train/validation split and train-only min-max scaling to reduce leakage risk. `--window-size 1` builds current-day feature inputs and labels the next 5 closing prices.
-- `institutional_net_buy_ml_lstm_attention.py`: Trains an Attention + LSTM model with the same 12 engineered features, using per-stock chronological train/validation split and train-only min-max scaling for leakage-safe evaluation.
+- `institutional_net_buy_ml.py`: Trains a dilated 1D CNN model using TFRecord data for 5-day ahead multi-step close price prediction, with per-stock chronological train/validation split and train-only **Z-Score standardization** to enhance resistance to outliers and distribution drift.
+- `institutional_net_buy_ml_lstm_attention.py`: Trains an Attention + LSTM model with the same 11 engineered features, using per-stock chronological train/validation split and train-only **Z-Score standardization** for stationary feature inputs.
 - `institutional_net_buy_predict.py`: Loads a trained `.keras` model and runs predictions on TFRecord data.
-- `institutional_net_buy_predict_visual.py`: Generates comparison plots (PNG) of predicted vs. actual prices for stocks listed in `targets.txt`, with stock ID normalization (`strip`, `.0` cleanup) across TFRecord/targets/stats and an execution summary (`成功輸出圖檔`, `skip *`) for easier debugging.
-- `institutional_net_buy_predict_visual_all.py`: Runs the trained model across all stocks found in the TFRecord file and creates visualizations for the top-ranked predictions. It still reads `targets.txt` to mark tracked stocks, but does not limit prediction to that list.
+- `institutional_net_buy_predict_visual.py`: Generates comparison plots (PNG) of predicted vs. actual prices for stocks listed in `targets.txt`, with stock ID normalization (`strip`, `.0` cleanup) across TFRecord/targets/stats and an execution summary (`成功輸出圖檔`, `skip *`) for easier debugging. **Features 5-prediction consensus ensemble** with exponential/linear/recency aggregation methods, confidence scoring (0-1), and optional individual prediction scatter points.
+- `institutional_net_buy_predict_visual_all.py`: Runs the trained model across all stocks found in the TFRecord file and creates visualizations for the top-ranked predictions. It still reads `targets.txt` to mark tracked stocks, but does not limit prediction to that list. **Includes identical consensus ensemble features** for batch processing with confidence-based ranking.
 - `institutional_net_buy_trend_monitor.py`: Non-ML analyzer that searches for stocks with increasing or sustained-high institutional net-buy trends and prints recommendations.
 - `parse_stock_id.py`: Utility script to extract `stock_id` from CSV files (such as trend monitor outputs) and save them as a plain text list (e.g., `targets.txt`) while preserving formatting like leading zeros.
 - `institutional_net_buy_visualizer.py`: Plots cumulative institutional net-buy and close price for stock IDs listed in `targets.txt`.
@@ -118,24 +118,42 @@ This folder contains several helper scripts for institutional flow monitoring an
 6.  Train a model from TFRecord data using the leakage-fixed dilated CNN pipeline:
     ```powershell
     python institutional_net_buy_ml.py `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
-        --epochs 50 `
-        --batch-size 64 `
-        --window-size 5 `
-        --val-ratio 0.2
-    ```
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+        --epochs 100 `
+        --batch-size 256 `
+        --window-size 32 `
+        --val-ratio 0.2 `
+        --loss mse `
+        --target-transform tanh `
+        --tanh-scale 50 `
+        --no-cache
 
+    or
+        --target-transform none `
+        --loss quantile `
+        --quantile 0.75
+    ```
+    for V3 edition:
+    ```powershell
+    python institutional_net_buy_ml_v3.py `
+        --tfrecord-path .\institutional_net_buy_2026-02-21_2026-05-22.tfrecord `
+        --epochs 100 `
+        --batch-size 256 `
+        --window-size 10 `
+        --loss huber
+    ```
     Use `--window-size 1` to train the 5-day multi-step forecast model, where a single day of institutional features predicts the next 5 close prices. Larger window sizes will create a multi-day input sequence instead.
     
-    **Label Normalization**: Both input features and target labels (close prices) are normalized per stock using train-only Min-Max scaling. This script writes `*_leakage_fixed.stats.json` with `target_min` and `target_max`, which are required for denormalizing predictions.
+    **Return Target Transform**: Input features are scaled per stock using train-only **Z-Score standardization**. Target labels are modeled as future log-returns and support configurable transforms via `--target-transform` (`clip` / `tanh` / `none`).
+    The script writes `*.leakage_fixed.stats.json` including per-stock target-transform metadata and Z-Score stats (`mean`, `std`) used by visualization scripts to decode model outputs.
 
-7.  Train using Attention + LSTM with a temporal split and train-only scaling:
+7.  Train using Attention + LSTM with a temporal split and train-only Z-Score scaling:
     ```powershell
     python institutional_net_buy_ml_lstm_attention.py `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
         --epochs 50 `
-        --batch-size 64 `
-        --window-size 5 `
+        --batch-size 256 `
+        --window-size 20 `
         --val-ratio 0.2
     ```
 
@@ -145,38 +163,60 @@ This folder contains several helper scripts for institutional flow monitoring an
     ```powershell
     python institutional_net_buy_predict.py `
         --model-path institutional_net_buy_model.keras `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
-        --window-size 5 `
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+        --window-size 20 `
         --limit 100
     ```
-9.  Visualize model predictions for target stocks:
-    for the dilated CNN:
+9.  Visualize model predictions for target stocks with consensus ensemble:
+    for the dilated CNN with exponential ensemble (default):
     ```powershell
     python institutional_net_buy_predict_visual.py `
         --model-path institutional_net_buy_v2_dilated.keras `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
-        --stats-path institutional_net_buy_2026-02-20_2026-05-21.leakage_fixed.stats.json `
-        --window-size 5
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+        --stats-path institutional_net_buy_2024-05-22_2026-05-22.leakage_fixed.stats.json `
+        --window-size 32 `
+        --ensemble-method exponential `
+        --ensemble-future true
     ```
-    for LSTM+Attention:
+    for LSTM+Attention with linear aggregation:
     ```powershell
     python institutional_net_buy_predict_visual.py `
         --model-path institutional_net_buy_v3_lstm_attention.keras `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
-        --stats-path institutional_net_buy_2026-02-20_2026-05-21_lstmattn.stats.json `
-        --window-size 5
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+        --stats-path institutional_net_buy_2024-05-22_2026-05-22_lstmattn.stats.json `
+        --window-size 20 `
+        --ensemble-method linear `
+        --show-individual-preds true
     ```
-    for all-stock visualization:
+    for all-stock visualization with confidence filtering:
     ```powershell
     python institutional_net_buy_predict_visual_all.py `
         --model-path institutional_net_buy_v3_lstm_attention.keras `
-        --tfrecord-path institutional_net_buy_2026-02-20_2026-05-21.tfrecord `
-        --stats-path institutional_net_buy_2026-02-20_2026-05-21.leakage_fixed.stats.json `
-        --window-size 5
+        --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+        --stats-path institutional_net_buy_2024-05-22_2026-05-22.leakage_fixed.stats.json `
+        --window-size 20 `
+        --top-n 50 `
+        --ensemble-method exponential `
+        --confidence-threshold 0.5
+    ```
+
+    for CNN V3 edition:
+    ```powershell
+    python institutional_net_buy_predict_visual_all_v3.py `
+        --model-path "model_w10_p5_dim12.keras" `
+        --tfrecord-path institutional_net_buy_2026-02-21_2026-05-22.tfrecord `
+        --scaler-path ".cache/scaler_dim12.npz" `
+        --top-n 20
     ```
 
     Plots are saved to the `predict_plot/` folder as `{stock_id}_{name}.png`.
-    The script automatically denormalizes model predictions using `target_min` and `target_max` from the provided stats file (`--stats-path`), ensuring accurate visualization of predicted vs. actual prices in their original value ranges.
+    The script automatically decodes model outputs using target-transform metadata from the provided stats file (`--stats-path`), ensuring consistent interpretation when training with `clip`/`tanh` target transforms.
+    **Consensus Ensemble** aggregates the 5 daily predictions (D+1 through D+5) generated by sliding windows:
+    - **Exponential weights** [16,8,4,2,1] emphasize the most recent prediction
+    - **Linear weights** [5,4,3,2,1] provide gradual decay
+    - **Recency** uses only the most recent (D+1) prediction
+    - **Confidence score** (0-1) quantifies signal strength: `1/(1+std)` where std is the standard deviation of the 5 predictions
+    - **Future ensemble** applies the same aggregation to future 5-day predictions
     The script prints a run summary including `成功輸出圖檔` and `skip` counters (`not_in_targets`, `not_in_stats`, `too_short`, `no_window`) for quick root-cause checks when output is empty.
 
 ## Testing
@@ -191,6 +231,25 @@ python test/test_integration.py
 ```
 
 These scripts verify the updated model architecture, TFRecord multi-step label pipeline, and end-to-end training flow.
+
+## Consensus Ensemble Parameters
+
+### 5-Prediction Aggregation (Visualization Scripts)
+
+Both `institutional_net_buy_predict_visual.py` and `institutional_net_buy_predict_visual_all.py` support consensus ensemble mechanism to aggregate the 5 daily predictions generated by sliding windows:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--ensemble-method` | `exponential` | Aggregation strategy: `exponential` (weights [16,8,4,2,1]), `linear` (weights [5,4,3,2,1]), `recency` (D+1 only), or `none` (simple average) |
+| `--ensemble-future` | `true` | Apply consensus ensemble to future 5-day predictions |
+| `--show-individual-preds` | `false` | Display individual D+1-D+5 predictions as scatter points on visualization |
+| `--confidence-threshold` | `0.0` | Minimum confidence score (0-1) to display bars; higher values filter low-confidence predictions |
+
+### Confidence Scoring
+
+The confidence score is computed as: `1 / (1 + std(predictions))`, where std is the standard deviation of the 5 daily predictions.
+- **Range**: 0 to 1 (1 = perfect consensus, 0 = high disagreement)
+- **Visualization**: Deep green bars (≥0.7), light green bars (0.5-0.7), gray bars (<threshold)
 
 ## CLI Reference
 
@@ -302,3 +361,20 @@ Each `tf.train.Example` contains a vectorized day-slice:
 - Each stock triggers **two** FinMind API calls (institutional data + daily price). Account for this when setting quota thresholds.
 - Stocks with no institutional data in the requested date range are logged as `empty` and excluded from output.
 - Price data unavailability (e.g. newly listed stocks) results in `close = 0.0` rather than a failed run.
+
+## 機器學習模型訓練 (ML Training)
+
+本模組支援 Dilated CNN 與 LSTM+Attention 兩種架構，設計用於捕捉法人籌碼與價格間的長短期依賴關係。
+
+### 特徵處理 (Feature Engineering)
+- **歸一化策略**：全面採用 **Z-Score Standardization**。模型輸入為特徵偏離歷史平均的標準差倍數，能有效識別「異常量能」。
+- **定常化處理**：價格斜率 (Slope) 已除以股價，轉化為每日漲跌百分比，確保高低價股具備相同尺標。
+- **目標值轉換**：預設使用 `tanh` 轉換將報酬率壓縮至舒適區間，減少極端離群值對 Loss 的干擾。
+
+### 訓練範例
+```powershell
+# 訓練 CNN 模型 (預設參數)
+python institutional_net_buy_ml.py --window-size 32 --target-transform tanh
+
+# 訓練 LSTM+Attention 模型
+python institutional_net_buy_ml_lstm_attention.py --epochs 50 --batch-size 128
