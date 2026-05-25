@@ -595,12 +595,21 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
 
     if "vwap" not in df.columns:
         df["vwap"] = df["close"]
+        
+    # 如果原始資料沒有 sell 欄位，手動用 buy 和 net_buy 推算 (以防萬一)
+    if "sell" not in df.columns and "buy" in df.columns and "net_buy" in df.columns:
+        df["sell"] = df["buy"] - df["net_buy"]
 
-    # 進行 Pivot，將原本同一天的 5 筆法人的 net_buy 與 buy 展開變成獨立特徵欄位
+    # 進行 Pivot，將原本同一天的 5 筆法人的 net_buy、buy 與 sell 展開變成獨立特徵欄位
+    # 確保 values 中包含 sell，這樣才能計算出完整的週轉量
+    values_to_pivot = ["net_buy", "buy"]
+    if "sell" in df.columns:
+        values_to_pivot.append("sell")
+
     pivot_df = df.pivot_table(
         index=["date", "stock_id", "stock_name", "close", "vwap"],
         columns="investor_name",
-        values=["net_buy", "buy"],
+        values=values_to_pivot,
         aggfunc="sum",
         fill_value=0
     ).reset_index()
@@ -615,6 +624,8 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
             pivot_df[f"{inv}_net_buy"] = 0
         if f"{inv}_buy" not in pivot_df.columns:
             pivot_df[f"{inv}_buy"] = 0
+        if f"{inv}_sell" not in pivot_df.columns:
+            pivot_df[f"{inv}_sell"] = 0
 
     pivot_df = pivot_df.sort_values(by=["stock_id", "date"]).reset_index(drop=True)
 
@@ -640,6 +651,7 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
         
         vwap_price = pivot_df.at[i, "vwap"]
         
+        # 這裡是你精華的成本估算邏輯：只用純買進(buy)與均價(vwap)計算防守線！
         for inv_idx, inv in enumerate(expected_investors):
             buy_vol = pivot_df.at[i, f"{inv}_buy"]
             
@@ -652,35 +664,73 @@ def export_to_tfrecord(df: pd.DataFrame, tfrecord_path: Path) -> None:
                 c_val = inv_state[inv]["total_cost"] / inv_state[inv]["inventory"]
             cost_arrays[inv_idx][i] = c_val
 
-    # Extract columns as numpy arrays once
+    # ==========================================
+    # 提取所有陣列，準備寫入 TFRecord
+    # ==========================================
     dates = pivot_df["date"].to_numpy(dtype=str)
     stock_ids = pivot_df["stock_id"].to_numpy(dtype=str)
     stock_names = pivot_df["stock_name"].to_numpy(dtype=str)
     closes = pivot_df["close"].to_numpy(dtype=float)
+    vwaps = pivot_df["vwap"].to_numpy(dtype=float)  # 👈 新增：完美保留 VWAP
 
+    # 1. 淨買賣超 (Net Buy)
     foreign_net = pivot_df["外資_net_buy"].to_numpy(dtype=int)
     foreign_dealer_net = pivot_df["外資自營商_net_buy"].to_numpy(dtype=int)
     trust_net = pivot_df["投信_net_buy"].to_numpy(dtype=int)
     dealer_hedge_net = pivot_df["避險自營商_net_buy"].to_numpy(dtype=int)
     dealer_net = pivot_df["自營商_net_buy"].to_numpy(dtype=int)
 
+    # 2. 純買進 (Buy) - 👈 新增：用來算籌碼純度
+    foreign_buy = pivot_df["外資_buy"].to_numpy(dtype=int)
+    foreign_dealer_buy = pivot_df["外資自營商_buy"].to_numpy(dtype=int)
+    trust_buy = pivot_df["投信_buy"].to_numpy(dtype=int)
+    dealer_hedge_buy = pivot_df["避險自營商_buy"].to_numpy(dtype=int)
+    dealer_buy = pivot_df["自營商_buy"].to_numpy(dtype=int)
+
+    # 3. 純賣出 (Sell) - 👈 新增：用來算籌碼純度
+    foreign_sell = pivot_df["外資_sell"].to_numpy(dtype=int)
+    foreign_dealer_sell = pivot_df["外資自營商_sell"].to_numpy(dtype=int)
+    trust_sell = pivot_df["投信_sell"].to_numpy(dtype=int)
+    dealer_hedge_sell = pivot_df["避險自營商_sell"].to_numpy(dtype=int)
+    dealer_sell = pivot_df["自營商_sell"].to_numpy(dtype=int)
+
     total = len(dates)
-    logging.info("TFRecord 序列化開始 (Pivot後已展開特徵): %s 筆", total)
+    logging.info("TFRecord 序列化開始 (包含完整 VWAP, Buy, Sell 與 Cost 特徵): %s 筆", total)
 
     with tf.io.TFRecordWriter(str(tfrecord_path)) as writer:
         for i in range(total):
             example = tf.train.Example(
                 features=tf.train.Features(
                     feature={
+                        # 基本與價格資料
                         "date": tf.train.Feature(bytes_list=tf.train.BytesList(value=[dates[i].encode("utf-8")])),
                         "stock_id": tf.train.Feature(bytes_list=tf.train.BytesList(value=[stock_ids[i].encode("utf-8")])),
                         "stock_name": tf.train.Feature(bytes_list=tf.train.BytesList(value=[stock_names[i].encode("utf-8")])),
                         "close": tf.train.Feature(float_list=tf.train.FloatList(value=[float(closes[i])])),
+                        "vwap": tf.train.Feature(float_list=tf.train.FloatList(value=[float(vwaps[i])])), # 👈 寫入磁碟
+                        
+                        # 淨買賣超
                         "foreign_net_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_net[i])])),
                         "foreign_dealer_net_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_dealer_net[i])])),
                         "trust_net_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(trust_net[i])])),
                         "dealer_hedge_net_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_hedge_net[i])])),
                         "dealer_net_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_net[i])])),
+                        
+                        # 純買進
+                        "foreign_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_buy[i])])),
+                        "foreign_dealer_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_dealer_buy[i])])),
+                        "trust_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(trust_buy[i])])),
+                        "dealer_hedge_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_hedge_buy[i])])),
+                        "dealer_buy": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_buy[i])])),
+
+                        # 純賣出
+                        "foreign_sell": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_sell[i])])),
+                        "foreign_dealer_sell": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(foreign_dealer_sell[i])])),
+                        "trust_sell": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(trust_sell[i])])),
+                        "dealer_hedge_sell": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_hedge_sell[i])])),
+                        "dealer_sell": tf.train.Feature(int64_list=tf.train.Int64List(value=[int(dealer_sell[i])])),
+
+                        # 庫存平均成本線
                         "foreign_cost": tf.train.Feature(float_list=tf.train.FloatList(value=[float(foreign_cost[i])])),
                         "foreign_dealer_cost": tf.train.Feature(float_list=tf.train.FloatList(value=[float(foreign_dealer_cost[i])])),
                         "trust_cost": tf.train.Feature(float_list=tf.train.FloatList(value=[float(trust_cost[i])])),
