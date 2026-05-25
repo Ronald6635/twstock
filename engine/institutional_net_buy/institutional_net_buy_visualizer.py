@@ -71,6 +71,13 @@ def analyze_institutional_trends(csv_filename: str, targets_filename: str) -> No
         print("[WARNING] CSV 中找不到 targets.txt 指定的股票代碼，未產生任何圖表。")
         return
 
+    # 只保留最近 90 天的資料
+    cutoff_date = pd.Timestamp.now().normalize() - pd.Timedelta(days=90)
+    filtered_df = filtered_df[filtered_df['date'] >= cutoff_date].copy()
+    if filtered_df.empty:
+        print("[WARNING] 最近 90 天內沒有符合條件的資料，未產生任何圖表。")
+        return
+
     # 取得清單中所有的股票代碼
     unique_stocks = filtered_df['stock_id'].unique()
 

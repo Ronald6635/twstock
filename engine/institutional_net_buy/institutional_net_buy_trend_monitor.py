@@ -72,7 +72,7 @@ def load_tfrecord_to_dataframe(tfrecord_path: Path) -> pd.DataFrame:
     }
 
     rows: list[dict[str, object]] = []
-    raw_dataset = tf.data.TFRecordDataset(str(tfrecord_path))
+    raw_dataset = tf.data.TFRecordDataset(str(tfrecord_path), buffer_size=1024 * 1024 * 100) # 100MB buffer for efficiency
     for raw_example in raw_dataset:
         parsed = tf.io.parse_single_example(raw_example, feature_description)
         rows.append(

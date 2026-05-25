@@ -15,8 +15,8 @@ DEFAULT_TARGET_FILE: Path = SCRIPTS_DIR / "targets.txt"
 # Parameters for institutional_net_buy_fetcher.py
 # Set END_DATE to today's date for dynamic execution.
 # END_DATE = datetime.date.today().strftime("%Y-%m-%d")
-END_DATE = "2026-05-21" # Static end date for consistent testing
-DAYS_LOOKBACK = 90 # Number of calendar days to fetch data for
+END_DATE = "2026-05-22" # Static end date for consistent testing
+DAYS_LOOKBACK = 730 # Number of calendar days to fetch data for (2 years for robust ML training)
 STOCK_SOURCE = "all" # Choices: "all", "file", "list"
 STOCKS_LIST = "2330,2317" # Comma-separated stock IDs (only if STOCK_SOURCE is "list")
 API_THROTTLE_ENABLED = True # Enable adaptive API throttling
