@@ -3,6 +3,43 @@
 ==================================================================================
 1. 修正了 Windows 環境下讀取中文股票名稱會觸發 UnicodeDecodeError 的致命 Bug。
 2. 下方報酬率 Bar Plot 的歷史天數與上方股價線圖完美對齊為 40 天，且垂直座標完全咬合。
+3. 新增了預測共識機制，提供加權平均、投票方向和信心度評估等功能。
+4. 預設使用指數衰減加權，近期預測更重，並提供線性衰減和只用最新預測的選項。
+5. 預測結果的柱子顏色會根據共識信心度自動調整，低於閾值的柱子會用淡灰色標記以示警告。
+
+使用說明
+----------------
+請確保已經安裝了必要的 Python 套件（如 TensorFlow、Keras、Pandas、Matplotlib 等），並且已經訓練好模型並準備好 TFRecord 資料。
+在命令列中執行以下指令來運行視覺化腳本：
+
+```powershell
+python institutional_net_buy_predict_visual.py `
+    --model-path institutional_net_buy_v2_dilated.keras `
+    --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+    --stats-path institutional_net_buy_2024-05-22_2026-05-22.leakage_fixed.stats.json `
+    --window-size 32 `
+    --ensemble-method exponential `
+    --confidence-threshold 0.5
+```
+參數說明：
+- `--model-path`: 訓練好的 Keras 模型檔案路徑。
+- `--tfrecord-path`: 包含預測資料的 TFRecord 檔案路徑。
+- `--stats-path`: 包含資料統計資訊的 JSON 檔案路徑（用於解碼預測值）。
+- `--window-size`: 模型輸入的時間窗口大小（默認 32）。
+- `--ensemble-method`: 歷史預測聚合策略，選項包括：
+  - `exponential`: 指數衰減加權（預設，權重為 [16, 8, 4, 2, 1]）
+  - `linear`: 線性衰減加權（權重為 [5, 4, 3, 2, 1]）
+  - `recency`: 只使用最新一天的預測（權重為 [1, 0, 0, 0, 0]）
+  - `none`: 不進行聚合，直接使用原始預測值
+- `--confidence-threshold`: 預測信心度閾值，低於此值的預測柱子將被標記為淡灰色（默認 0.5）。
+
+注意事項
+- 請確保模型訓練時使用的 `window_size` 與此處一致，以避免輸入維度不匹配。
+- 預測共識機制需要至少兩個有效預測值才能計算信心度，否則將默認為 0.5。
+- 如果 TFRecord 中的預測值全為非有限（NaN 或 Inf），則加權平均將返回 NaN，並且柱子將被標記為淡灰色。
+- 預測結果將會在命令列中以表格形式顯示，並且會生成對應的 PNG 圖片文件，每個目標股票一張，保存在當前目錄下。
+- 圖片文件名稱格式為 `{stock_id}_{stock_name}.png`，包含預測的報酬率柱狀圖和收盤價線圖。
+
 """
 
 import os

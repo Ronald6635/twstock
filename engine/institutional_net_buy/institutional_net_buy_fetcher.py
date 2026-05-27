@@ -9,6 +9,19 @@ Key features:
 - Quota-aware protection with adaptive throttle
 - Retry with exponential backoff for unstable API calls
 - Optional TFRecord export for TensorFlow pipelines
+
+Usage:
+    ```powershell
+    python institutional_net_buy_fetcher.py `
+    --stock-source file `
+    --target-file targets.txt `
+    --end-date 2026-05-11 `
+    --days 90 `
+    --csv-path institutional_net_buy_2026-02-10_2026-05-11.csv `
+    --export-tfrecord `
+    --tfrecord-path institutional_net_buy_2026-02-10_2026-05-11.tfrecord `
+    --api-throttle-enabled
+    ```
 """
 
 from __future__ import annotations

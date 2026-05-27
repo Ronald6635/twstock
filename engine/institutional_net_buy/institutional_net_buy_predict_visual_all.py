@@ -2,6 +2,25 @@
 使用訓練好的 Dilated CNN 模型進行全市場選股 (修復 Unicode 崩潰 + 40天精準全對齊版)
 ==================================================================================
 全面批量推理全市場個股，挑選 Top 20 潛力回報股，並生成 40 天歷史日期完美咬合的看盤圖表。
+主要功能：
+1. 從 TFRecord 讀取全市場數據，進行特徵工程和標準化處理。
+2. 使用訓練好的模型對每支股票進行預測，並解碼回實際的趨勢百分比。
+3. 根據預測結果排序，選出 Top 20 強勢股。
+4. 為每支 Top 20 股票生成一張包含過去 40 天的法人買賣超趨勢和收盤價的圖表，並在圖表上標註預測的未來趨勢百分比。
+
+使用說明：
+```powershell
+python institutional_net_buy_predict_visual_all.py `
+    --model-path institutional_net_buy_v2_dilated.keras `
+    --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+    --stats-path institutional_net_buy_2024-05-22_2026-05-22.leakage_fixed.stats.json `
+    --window-size 20 `
+    --top-n 50
+```
+
+注意事項：
+- 確保提供的 TFRecord 文件包含正確格式的數據，並且 stats JSON 文件與 TFRecord 中的股票 ID 完全對應。
+- 圖表將保存為 PNG 格式，保存在腳本所在的 `predict_plot` 資料夾中。
 """
 
 import os

@@ -1,3 +1,15 @@
+"""
+Automates the entire workflow for institutional net buy analysis, from data fetching to trend monitoring and visualization.
+This script sequentially executes the following steps:
+1. Fetch institutional net buy data for a specified date range and export to CSV and TFRecord.
+2. Analyze trends in the institutional net buy data to identify candidate stocks.   
+3. Extract target stock IDs from the trend analysis results.
+4. Visualize cumulative net buy trends for the identified target stocks.
+Each step is executed as a separate subprocess, allowing for modularity and easier debugging.
+Usage:
+    python run_all_analysis.py
+    Note: Ensure that all required scripts (fetcher, trend monitor, parser, visualizer) are present in the same directory as this script.
+"""
 import subprocess
 import datetime
 from pathlib import Path
@@ -15,7 +27,7 @@ DEFAULT_TARGET_FILE: Path = SCRIPTS_DIR / "targets.txt"
 # Parameters for institutional_net_buy_fetcher.py
 # Set END_DATE to today's date for dynamic execution.
 # END_DATE = datetime.date.today().strftime("%Y-%m-%d")
-END_DATE = "2026-05-22" # Static end date for consistent testing
+END_DATE = "2026-05-25" # Static end date for consistent testing
 # DAYS_LOOKBACK = 730 # Number of calendar days to fetch data for (2 years for robust ML training)
 DAYS_LOOKBACK = 90 # Shorter lookback for faster testing and visualization
 STOCK_SOURCE = "all" # Choices: "all", "file", "list"

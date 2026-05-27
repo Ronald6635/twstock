@@ -1,3 +1,16 @@
+"""
+Reads institutional net-buy CSV and targets.txt, then plots cumulative net-buy and close price trends for target stocks.
+
+Usage:
+```powershell
+python institutional_net_buy_visualizer.py `
+  --csv-filename institutional_net_buy_2026-02-10_2026-05-11.csv `
+  --targets-filename targets.txt
+```
+
+Note: Ensure the CSV file contains columns like 'stock_id', 'date', 'net_buy', 'close', and either 'name' or 'investor_name' for proper visualization. The script will generate PNG files for each target stock in the current directory.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import os

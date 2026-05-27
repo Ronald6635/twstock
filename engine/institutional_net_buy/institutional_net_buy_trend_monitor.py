@@ -8,6 +8,19 @@ Key features:
 - Loads pivoted institutional TFRecord records into tabular data
 - Detects stocks with increasing or sustained-high cumulative net buy
 - Adds price trend context and outputs recommendation reasons
+- Exports results to a CSV file for further analysis or visualization
+
+Usage:
+```powershell
+python institutional_net_buy_trend_monitor.py `
+  --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
+  --recent-days 10 `
+  --baseline-days 20 `
+  --min-history-days 40 `
+  --min-positive-ratio 0.6 `
+  --top-k 20 `
+  --output-csv trend_candidates_2026-02-08_2026-05-09.csv
+```
 """
 
 import argparse

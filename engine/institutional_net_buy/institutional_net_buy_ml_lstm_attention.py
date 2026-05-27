@@ -8,6 +8,19 @@ Key features:
 - Per-stock temporal split to prevent time-series leakage
 - Train-only min-max scaling for features; Global clipping for return targets
 - Direct return MAE and RMSE metrics for precise trading interpretability
+- Cache validation with TFRecord fingerprinting to ensure data integrity
+
+Usage:
+```powershell
+python institutional_net_buy_ml_lstm_attention.py `
+    --tfrecord-path institutional_net_buy_2024-05-22_2026-05-22.tfrecord `
+    --epochs 50 `
+    --batch-size 256 `
+    --window-size 20 `
+    --val-ratio 0.2
+```
+
+Note: Adjust `--tfrecord-path` to your actual TFRecord file. The script will automatically handle feature engineering, caching, and model training. Ensure you have sufficient data (at least 40 days per stock) for the specified window size and validation ratio.
 """
 
 import os

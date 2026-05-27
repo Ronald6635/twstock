@@ -3,6 +3,21 @@ Institutional Advanced Trend Monitor Module (V3 - Cost Deviation & Intensity Edi
 
 This script leverages fully pivoted TFRecords containing VWAP, Buy/Sell volumes,
 and dynamic Institutional Inventory Costs.
+
+Key Features:
+- Comprehensive feature engineering with weighted institutional net-buy and volume.
+- Sophisticated signal scoring system integrating trend strength, conviction intensity, and cost deviation.
+- Tactical recommendation engine based on multi-dimensional signal analysis.
+
+Usage:
+```powershell
+python institutional_net_buy_trend_monitor.py `
+  --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
+  --recent-days 10 `
+  --baseline-days 20
+```
+
+Note: Ensure the TFRecord file contains the expected features as defined in the script. The output will be a CSV file with candidate stocks ranked by signal strength, along with detailed observations and tactical recommendations for each stock.
 """
 
 import argparse
