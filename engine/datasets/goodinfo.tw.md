@@ -35,7 +35,7 @@
 1.  開啟 Excel 或 Google 試算表，貼上剛才複製的內容。
 2.  **最關鍵的一步：** 確保第一列（Header）有一欄名稱叫做 **`stock_id`**。
 3.  將股票代號填入該欄（例如：2330, 3034, 3017...）。
-4.  將檔案另存為 **`fundamental_pass.csv`**，並放在與你的 `screener_v3.py` 同一個資料夾下。
+4.  將檔案另存為 **`fundamental_pass.csv`**，並放在與你的 `screener_v4.1.py` 同一個資料夾下。
 
 
 
@@ -43,14 +43,14 @@
 
 ### 第三階段：執行 Python 腳本 (V3.0 精篩)
 
-當你的資料夾裡已經有了 `indicators.py`、`screener_v3.py` 和 `fundamental_pass.csv` 後，按照以下步驟執行：
+當你的資料夾裡已經有了 `indicators.py`、`screener_v4.1.py` 和 `fundamental_pass.csv` 後，按照以下步驟執行：
 
 #### Step 6: 填寫 Token 並執行
-1.  打開 `screener_v3.py`，找到這行：
+1.  打開 `screener_v4.1.py`，找到這行：
     `MY_TOKEN = "你的 FinMind Token"`
 2.  開啟終端機 (Terminal / Command Prompt)，進入該路徑：
     ```bash
-    python screener_v3.py
+    python screener_v4.1.py
     ```
 
 #### Step 7: 判讀輸出結果
@@ -61,7 +61,7 @@
 ---
 
 ### 💡 進階小撇步：如果你不想手動輸入 stock_id
-如果你從 Goodinfo 下載的 CSV 欄位名稱是「股票代碼」或「代號」，你只需要修改 `screener_v3.py` 裡面的一行程式碼即可：
+如果你從 Goodinfo 下載的 CSV 欄位名稱是「股票代碼」或「代號」，你只需要修改 `screener_v4.1.py` 裡面的一行程式碼即可：
 
 ```python
 # 原本是：

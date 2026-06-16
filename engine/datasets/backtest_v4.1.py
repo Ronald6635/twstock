@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from FinMind.data import DataLoader
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Union
+from tabulate import tabulate
 
 load_dotenv()  # 載入 .env 檔案中的環境變數
 
@@ -117,6 +118,35 @@ def fetch_chip_data(api: DataLoader, stock_id: str, chip_start_date: str, chip_e
     return collected
 
 
+def _calculate_chip_conditions(api: DataLoader, stock_id: str, end_date: str) -> tuple[float, float|None, bool]:
+    """Calculate 14-day foreign and margin chip metrics for a stock.
+
+    Args:
+        api (DataLoader): FinMind DataLoader instance used for chip data lookup.
+        stock_id (str): 股票代號。
+        end_date (str): 截止日期 (YYYY-MM-DD)。
+
+    Returns:
+        tuple[float, float|None, bool]:
+            - foreign_14_sum: 最近 14 日外資淨買賣（累計）。
+            - margin_14_change: 最近 14 日融資餘額變化；若資料不足則為 None。
+            - chip_ok: 外資買超且（無融資變化或融資下降）。
+    """
+    chip_start = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
+    chip_data = fetch_chip_data(api, stock_id, chip_start, end_date)
+
+    foreign_series = chip_data.get('foreign_by_date')
+    foreign_14_sum = float(foreign_series.sum()) if foreign_series is not None and not foreign_series.empty else 0.0
+
+    margin_series = chip_data.get('margin_by_date')
+    margin_14_change = None
+    if margin_series is not None and len(margin_series) >= 2:
+        margin_14_change = float(margin_series.iloc[-1] - margin_series.iloc[0])
+
+    chip_ok = (foreign_14_sum > 0) and (margin_14_change is None or margin_14_change <= 0)
+    return foreign_14_sum, margin_14_change, chip_ok
+
+
 # =============================================================================
 # CONFIGURATION AND INITIALIZATION
 # =============================================================================
@@ -153,6 +183,7 @@ def get_backtest_performance(api: DataLoader, stock_id: str, test_date: str, hol
     """
     end_date: str = (datetime.strptime(test_date, "%Y-%m-%d") + timedelta(days=hold_days + 15)).strftime("%Y-%m-%d")
     df_perf: pd.DataFrame = api.taiwan_stock_daily(stock_id=stock_id, start_date=test_date, end_date=end_date)
+    # test_date = backtest_date, end_date = backtest_date + hold_days + 15
 
     if df_perf is None or df_perf.empty:
         logging.warning(f"[{stock_id}] 從 {test_date} 起沒有績效計算資料。")
@@ -245,10 +276,8 @@ def run_backtest_v41(csv_file_name: str, token: Optional[str] = None, backtest_d
     # 讀取 CSV
     candidate_df: pd.DataFrame
     try:
-        candidate_df = pd.read_csv(full_csv_path)
-        # 確保 stock_id 欄位是正確的，並且處理可能存在的 Excel 引用格式
-        # 假設 stock_id 在第0欄 (iloc[:, 0])，並且是數字
-        candidate_df['stock_id'] = candidate_df.iloc[:, 0].astype(str).str.extract(r'(\d+)')
+        candidate_df = pd.read_csv(full_csv_path, dtype={'代號': str})
+        candidate_df['stock_id'] = candidate_df['代號'].astype(str).str.extract(r'(\d+)')
         # 獲取公司名稱，為日誌和報告準備
         candidate_df['stock_name'] = candidate_df['名稱']
         stocks: List[str] = candidate_df['stock_id'].dropna().tolist()
@@ -277,6 +306,7 @@ def run_backtest_v41(csv_file_name: str, token: Optional[str] = None, backtest_d
         try:
             # 抓取至回測日為止的資料進行篩選
             df = api.taiwan_stock_daily(stock_id=stock_id, start_date=data_start, end_date=backtest_date)
+            # data_start = backtest_date - 180 days
             
             if df is None or df.empty or len(df) < 60: # 需要足夠數據計算 MA60
                 logging.info(f"[{stock_id} {stock_name}] 數據不足或 FinMind API 無資料，跳過。")
@@ -333,25 +363,13 @@ def run_backtest_v41(csv_file_name: str, token: Optional[str] = None, backtest_d
             is_trending: bool = current_price > ma20 > ma60
             is_bullish_st: bool = latest['direction'] == 1 # 從 df 中的 'direction' 欄位獲取
 
-            # === 新增籌碼：回推 14 天外資淨買賣、融資餘額變化 ===
-            chip_start: str = (datetime.strptime(backtest_date, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
-            chip_data: Dict[str, Any] = fetch_chip_data(api, stock_id, chip_start, backtest_date)
-
-            foreign_series = chip_data.get('foreign_by_date')
-            foreign_14_sum = float(foreign_series.sum()) if foreign_series is not None and not foreign_series.empty else 0.0
-
-            margin_series = chip_data.get('margin_by_date')
-            margin_change = None
-            if margin_series is not None and len(margin_series) >= 2:
-                margin_change = float(margin_series.iloc[-1] - margin_series.iloc[0])
-
-            chip_ok = (foreign_14_sum > 0) and (margin_change is None or margin_change <= 0)
-
             # 篩選條件：成交值 > 3億 & 均線多頭 & Supertrend 多頭
             if daily_turnover > 300_000_000 and is_trending and is_bullish_st:
                 # 計算績效
                 ret, max_ret = get_backtest_performance(api, stock_id, backtest_date, hold_days)
-                
+                # 由函數取得籌碼條件結果
+                foreign_14_sum, margin_change, chip_ok = _calculate_chip_conditions(api, stock_id, backtest_date)
+
                 if ret is not None and max_ret is not None:
                     results.append({
                         '代號': stock_id,
@@ -360,7 +378,8 @@ def run_backtest_v41(csv_file_name: str, token: Optional[str] = None, backtest_d
                         '持有期報酬(%)': ret,
                         '期間最大漲幅(%)': max_ret,
                         '外資14天淨買(累計)': round(foreign_14_sum, 2),
-                        '融資14天變化': round(margin_change, 2) if margin_change is not None else None
+                        '融資14天變化': round(margin_change, 2) if margin_change is not None else None,
+                        '進場停損(ST)': round(latest['supertrend'], 2)
                     })
                     logging.info(f"✅ [{stock_id} {stock_name}] 符合篩選! 進場價: {current_price:.2f}, 預期報酬率: {ret:.2f}%")
                 else:
@@ -390,14 +409,17 @@ def run_backtest_v41(csv_file_name: str, token: Optional[str] = None, backtest_d
     report: pd.DataFrame = pd.DataFrame(results)
     if not report.empty:
         # 排序報告以便閱讀
-        report = report.sort_values(by='持有期報酬(%)', ascending=False).reset_index(drop=True)
-        # 調整顯示設定，固定欄寬便於 terminal 對齊
-        with pd.option_context('display.max_columns', None, 'display.width', 180, 'display.colheader_justify', 'center'):
-            print(f"\n📈 V4.1 歷史回測報告 ({backtest_date})")
-            print(report.to_string(index=False, col_space=13, justify='right'))
+        df = report.sort_values(by='持有期報酬(%)', ascending=False).reset_index(drop=True)
+        print("\n📈 V4.1 歷史回測報告 ({})".format(backtest_date))
+        print(tabulate(df, headers='keys', tablefmt='github', showindex=False, floatfmt=".2f"))
         print(f"\n總結: 篩選出 {len(report)} 檔符合標的。")
         print(f"平均報酬率: {report['持有期報酬(%)'].mean():.2f}%")
         print(f"勝率: {(report['持有期報酬(%)'] > 0).sum() / len(report) * 100:.1f}%")
+
+        # 產出模擬交易輸入檔
+        output_filename = f"v41_passed_{backtest_date}.csv"
+        report.to_csv(output_filename, index=False, encoding='utf-8-sig')
+        print(f"\n💾 已產出模擬交易輸入檔：{output_filename}")
     else:
         print(f"\n此日期 ({backtest_date}) 無符合標的。")
 

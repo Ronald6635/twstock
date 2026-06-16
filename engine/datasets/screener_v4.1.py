@@ -5,11 +5,11 @@ This module implements an advanced stock screening process, extending V3.0 with
 additional technical indicators and institutional investor (籌碼) data.
 
 Key features:
-- 讀取 `fundamental_pass.csv` 作為篩選候選。
+- 讀取 `fundamental_pass_2026Q1.csv` 作為篩選候選。
 - 透過 FinMind API 抓取日線價格資料與外資/融資籌碼資料。
 - 計算多種技術指標，包括均線、Supertrend、RSI、MACD、ADX、Stochastic、OBV。
 - 綜合成交值、趨勢、Supertrend、技術面、盈虧比及籌碼健康度進行多層次篩選。
-- 將篩選結果輸出至終端，並將篩選原因回寫至 `fundamental_pass.csv`。
+- 將篩選結果輸出至終端，並將篩選原因回寫至 `fundamental_pass_2026Q1.csv`。
 """
 
 import os
@@ -159,7 +159,7 @@ def run_v4_screener(csv_path: str, token: str | None = None) -> None:
     api = DataLoader()
     api.login_by_token(token)
 
-    candidate_df = pd.read_csv(csv_path)
+    candidate_df = pd.read_csv(csv_path, dtype={'代號': str})  # Force string dtype to prevent int64 inference
     candidate_df['stock_id'] = candidate_df['代號'].str.extract(r'(\d+)')
     stocks = candidate_df['stock_id'].dropna().tolist()
     name_mapping = candidate_df.set_index(candidate_df['stock_id'].astype(str))['名稱'].to_dict()
@@ -311,7 +311,7 @@ if __name__ == "__main__":
 
     This block is executed when the script is run directly.
     It retrieves the FinMind API token from environment variables,
-    constructs the path to the fundamental_pass.csv file, and then
+    constructs the path to the fundamental_pass_2026Q1.csv file, and then
     calls the `run_v4_screener` function to start the screening process.
 
     Raises:
@@ -320,5 +320,5 @@ if __name__ == "__main__":
     token = os.getenv('FINMIND_API_KEY')
     if not token:
         raise RuntimeError('請設定 FINMIND_API_KEY')
-    csv_path = os.path.join(os.path.dirname(__file__), 'fundamental_pass.csv')
+    csv_path = os.path.join(os.path.dirname(__file__), 'fundamental_pass_2026Q1.csv')
     run_v4_screener(csv_path, token)

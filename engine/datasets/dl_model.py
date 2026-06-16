@@ -147,7 +147,7 @@ def _select_optimizer(name: Optional[str], lr: float):
     if name == 'adam':
         return Adam(learning_rate=lr)
     if name == 'sgd':
-        return keras.optimizers.SGD(learning_rate=lr)
+        return keras.optimizers.SGD(learning_rate=lr, momentum=0.9)
     if name in ('rmsprop', 'rms'):
         return keras.optimizers.RMSprop(learning_rate=lr)
     raise ValueError(f"Unknown optimizer: {name!r}")
