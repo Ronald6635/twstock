@@ -105,7 +105,7 @@ def execute_gpu_test(results: Dict[str, Any]) -> None:
         completed = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
         if completed.returncode == 0:
             print("\n--- nvidia-smi output (snippet) ---")
-            print("\n".join(completed.stdout.splitlines()[:15]))
+            print("\n".join(completed.stdout.splitlines()[:12]))
             print("--- end snippet ---\n")
     except Exception:
         pass

@@ -124,7 +124,6 @@ logs/
 docs/reference/
 cache/
 engine/datasets/*/*.json
-engine/datasets/*/*.csv
 engine/datasets/*/*.html
 
 # GitHub workflows
@@ -132,10 +131,12 @@ engine/datasets/*/*.html
 engine/datasets/best_model.*
 examples/
 engine/datasets/results.json
-engine/robot/data/*.csv
 engine/robot/data/*.json
 engine/robot/reports/*.txt
 engine/robot/summary/
-engine/datasets/results.json
-engine/robot/reports/report_*.csv
-engine/datasets/results.json
+*.csv
+engine/institutional_net_buy/*.tfrecord
+engine/institutional_net_buy/*.keras
+*.png
+*.json
+engine/institutional_net_buy/*.npy
