@@ -25,10 +25,15 @@ python institutional_net_buy_trend_monitor.py `
 
 import argparse
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from scipy import stats
+
+# Suppress scipy warnings for constant input arrays (expected in some stocks)
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='scipy')
 
 
 FEATURE_COLUMNS = [
@@ -60,6 +65,48 @@ def _safe_slope(values: pd.Series) -> float:
     return float(slope)
 
 
+def _safe_slope_spearman(values: pd.Series) -> float:
+    """
+    Calculate Spearman rank correlation as robust slope estimator.
+    
+    Immune to sudden spikes by measuring monotonic trend via ranking rather
+    than absolute magnitude. If a stock has 9 days of small buys followed by
+    one day of massive 100x spike, OLS slope distorts; Spearman still detects
+    the underlying uptrend without distortion.
+    
+    Args:
+        values: Time series values (e.g., institutional net buy shares).
+        
+    Returns:
+        Spearman rank correlation coefficient in [-1.0, +1.0].
+        +1.0 = perfect monotonic increase, 0.0 = no trend, -1.0 = decrease.
+        Returns 0.0 if input has fewer than 5 clean data points.
+        
+    Example:
+        >>> import pandas as pd
+        >>> s_clean = pd.Series([10, 20, 30, 40, 50])
+        >>> slope = _safe_slope_spearman(s_clean)  # ~1.0
+        >>> 
+        >>> s_spike = pd.Series([10, 20, 30, 40, 1000])  # Day 5 spike
+        >>> slope_robust = _safe_slope_spearman(s_spike)  # Still ~1.0, not distorted
+    """
+    clean: pd.Series = values.astype(float).replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+    
+    if len(clean) < 5:
+        return 0.0
+    
+    x_axis: np.ndarray = np.arange(len(clean), dtype=float)
+    
+    try:
+        correlation: float
+        correlation, _ = stats.spearmanr(x_axis, clean.to_numpy())
+        return float(correlation) if not np.isnan(correlation) else 0.0
+    except Exception:
+        return 0.0
+
+
 def _compute_weighted_total_net_buy(dataframe: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
     """Compute weighted institutional net buy, lowering hedge weight for trend stability."""
     missing_columns = [col for col in weights if col not in dataframe.columns]
@@ -68,6 +115,76 @@ def _compute_weighted_total_net_buy(dataframe: pd.DataFrame, weights: dict[str, 
 
     weighted_columns = [dataframe[col].astype(float) * weight for col, weight in weights.items()]
     return sum(weighted_columns)
+
+
+def add_rolling_zscore_features(
+    dataframe: pd.DataFrame,
+    group_key: str,
+    feature_column: str,
+    rolling_window: int = 40,
+    min_periods: int = 20,
+) -> pd.DataFrame:
+    """
+    Add rolling Z-Score normalization feature for each stock independently.
+    
+    Converts absolute institutional net buy values into relative deviation
+    from rolling mean, normalized by rolling standard deviation. Enables
+    fair cross-sectional comparison between large-cap and small-cap stocks
+    without requiring external volume data.
+    
+    For example:
+    - Stock A (large-cap): +1,000 shares = 5 std above mean → Z-Score = +5.0
+    - Stock B (small-cap):   +100 shares = 5 std above mean → Z-Score = +5.0
+    
+    Args:
+        dataframe: Input DataFrame with time series institutional data.
+            Must have columns: group_key (stock identifier) and feature_column (values to normalize).
+        group_key: Column name for grouping (e.g., 'stock_id'.
+        feature_column: Column name of feature to normalize (e.g., 'total_net_buy'.
+        rolling_window: Number of periods for rolling window calculation. Default=40 days.
+        min_periods: Minimum observations required for rolling calculation. Default=20 days.
+        
+    Returns:
+        DataFrame with new column f"{feature_column}_zscore" appended.
+        Early rows (< min_periods) will have NaN for Z-Score.
+        
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'stock_id': ['2356', '2356', '2356'],
+        ...     'total_net_buy': [100, 200, 300]
+        ... })
+        >>> df_enhanced = add_rolling_zscore_features(
+        ...     df, group_key='stock_id', feature_column='total_net_buy'
+        ... )
+        >>> print(df_enhanced[['total_net_buy', 'total_net_buy_zscore']])
+    """
+    result: pd.DataFrame = dataframe.copy()
+    
+    # Group by stock and compute rolling mean/std for each stock independently
+    grouped = result.groupby(group_key)
+    
+    rolling_mean: pd.Series = grouped[feature_column].transform(
+        lambda x: x.rolling(
+            window=rolling_window,
+            min_periods=min_periods,
+        ).mean()
+    )
+    
+    rolling_std: pd.Series = grouped[feature_column].transform(
+        lambda x: x.rolling(
+            window=rolling_window,
+            min_periods=min_periods,
+        ).std()
+    )
+    
+    # Compute Z-Score: (value - mean) / (std + epsilon)
+    # Add 1e-8 denominator protection to avoid inf/nan when std ≈ 0
+    zscore_column: str = f"{feature_column}_zscore"
+    result[zscore_column] = (
+        (result[feature_column] - rolling_mean) / (rolling_std + 1e-8)
+    )
+    
+    return result
 
 
 def load_tfrecord_to_dataframe(tfrecord_path: Path) -> pd.DataFrame:
@@ -111,6 +228,16 @@ def load_tfrecord_to_dataframe(tfrecord_path: Path) -> pd.DataFrame:
     dataframe = dataframe.dropna(subset=["date"])
     dataframe["total_net_buy"] = _compute_weighted_total_net_buy(dataframe, DEFAULT_WEIGHTS)
     dataframe = dataframe.sort_values(["stock_id", "date"]).reset_index(drop=True)
+    
+    # Add rolling Z-Score normalization for fair cross-sectional comparison
+    dataframe = add_rolling_zscore_features(
+        dataframe,
+        group_key="stock_id",
+        feature_column="total_net_buy",
+        rolling_window=40,
+        min_periods=20,
+    )
+    
     return dataframe
 
 
@@ -137,6 +264,13 @@ def analyze_trends(
     if dataframe.empty:
         return pd.DataFrame()
 
+    # 新增：排除 ETF 和基金
+    dataframe = dataframe[~dataframe['stock_id'].str.startswith('00')]
+    dataframe = dataframe[~dataframe['stock_id'].str.contains(r'[A-Za-z]', 
+                                                              na=False)]
+    dataframe = dataframe[~dataframe['stock_name'].str.contains('ETF|基金|KY', na=False)]
+    dataframe = dataframe[~dataframe['stock_name'].str.endswith('N', na=False)]
+
     candidates: list[dict[str, object]] = []
     grouped = dataframe.groupby(["stock_id", "stock_name"], sort=False)
 
@@ -154,7 +288,7 @@ def analyze_trends(
         recent_total = float(recent_slice["total_net_buy"].sum())
         recent_avg = float(recent_slice["total_net_buy"].mean())
         recent_positive_ratio = float((recent_slice["total_net_buy"] > 0).mean())
-        cumulative_recent_slope = _safe_slope(recent_slice["total_net_buy"].cumsum())
+        cumulative_recent_slope = _safe_slope_spearman(recent_slice["total_net_buy"].cumsum())
         baseline_avg = float(baseline_slice["total_net_buy"].mean())
 
         increasing_signal = (
@@ -172,7 +306,7 @@ def analyze_trends(
             continue
 
         close_recent = recent_slice["close"].astype(float)
-        price_slope = _safe_slope(close_recent)
+        price_slope = _safe_slope_spearman(close_recent)
         price_start = float(close_recent.iloc[0])
         price_end = float(close_recent.iloc[-1])
         if abs(price_start) < 1e-6:

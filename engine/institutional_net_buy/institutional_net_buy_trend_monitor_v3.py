@@ -11,10 +11,11 @@ Key Features:
 
 Usage:
 ```powershell
-python institutional_net_buy_trend_monitor.py `
-  --tfrecord-path institutional_net_buy_2026-02-08_2026-05-09.tfrecord `
+python institutional_net_buy_trend_monitor_v3.py `
+  --tfrecord-path institutional_net_buy_2026-02-26_2026-05-27.tfrecord `
   --recent-days 10 `
-  --baseline-days 20
+  --baseline-days 20 `
+  --top-k 50
 ```
 
 Note: Ensure the TFRecord file contains the expected features as defined in the script. The output will be a CSV file with candidate stocks ranked by signal strength, along with detailed observations and tactical recommendations for each stock.

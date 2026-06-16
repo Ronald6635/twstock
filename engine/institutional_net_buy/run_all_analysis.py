@@ -27,7 +27,7 @@ DEFAULT_TARGET_FILE: Path = SCRIPTS_DIR / "targets.txt"
 # Parameters for institutional_net_buy_fetcher.py
 # Set END_DATE to today's date for dynamic execution.
 # END_DATE = datetime.date.today().strftime("%Y-%m-%d")
-END_DATE = "2026-05-25" # Static end date for consistent testing
+END_DATE = "2026-06-15" # Static end date for consistent testing
 # DAYS_LOOKBACK = 730 # Number of calendar days to fetch data for (2 years for robust ML training)
 DAYS_LOOKBACK = 90 # Shorter lookback for faster testing and visualization
 STOCK_SOURCE = "all" # Choices: "all", "file", "list"
